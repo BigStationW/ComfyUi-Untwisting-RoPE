@@ -1,4 +1,4 @@
-# ComfyUi-Untwisting-RoPE (Training-Free Style Tranfer)
+# ComfyUi-Untwisting-RoPE (Training-Free Style Transfer)
 
 This is a ComfyUi implementation of [Untwisting RoPE: Frequency Control for Shared Attention in DiTs](https://arxiv.org/abs/2602.05013)
 
