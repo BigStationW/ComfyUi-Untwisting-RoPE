@@ -8,6 +8,7 @@ https://untwisting-rope.github.io/
 
 
 - Only Z-image Turbo is implemented so far (I'll see if I'll implement other models).
+- You can see more examples [here](https://github.com/BigStationW/ComfyUi-Untwisting-RoPE/tree/main/Examples).
 
 ## Installation
 
