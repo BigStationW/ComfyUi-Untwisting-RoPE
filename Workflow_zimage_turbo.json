@@ -16,7 +16,7 @@
         220.0000000000001
       ],
       "flags": {},
-      "order": 11,
+      "order": 13,
       "mode": 0,
       "inputs": [
         {
@@ -61,45 +61,6 @@
       ]
     },
     {
-      "id": 612,
-      "type": "LoadImage",
-      "pos": [
-        -102.84151691065208,
-        1161.3938579968244
-      ],
-      "size": [
-        282.798828125,
-        314.00000000000006
-      ],
-      "flags": {},
-      "order": 0,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "IMAGE",
-          "type": "IMAGE",
-          "links": [
-            1539
-          ]
-        },
-        {
-          "name": "MASK",
-          "type": "MASK",
-          "links": null
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.21.1",
-        "Node name for S&R": "LoadImage"
-      },
-      "widgets_values": [
-        "Capture (1).JPG",
-        "image"
-      ]
-    },
-    {
       "id": 333,
       "type": "VAEEncode",
       "pos": [
@@ -140,29 +101,6 @@
         "Node name for S&R": "VAEEncode"
       },
       "widgets_values": []
-    },
-    {
-      "id": 615,
-      "type": "Note",
-      "pos": [
-        787.1430423087029,
-        1001.7856176136829
-      ],
-      "size": [
-        289.0740052806825,
-        112.57343506692268
-      ],
-      "flags": {},
-      "order": 1,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [],
-      "properties": {},
-      "widgets_values": [
-        "The quality of the style transfer depends largely on the quality of the RF inversion. These settings work well, but feel free to try other values."
-      ],
-      "color": "#c09430",
-      "bgcolor": "rgba(24,24,27,.9)"
     },
     {
       "id": 559,
@@ -225,7 +163,7 @@
         116.00450279158758
       ],
       "flags": {},
-      "order": 2,
+      "order": 0,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -248,7 +186,7 @@
         58
       ],
       "flags": {},
-      "order": 3,
+      "order": 1,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -281,7 +219,7 @@
         82
       ],
       "flags": {},
-      "order": 4,
+      "order": 2,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -304,107 +242,6 @@
       ]
     },
     {
-      "id": 31,
-      "type": "BasicScheduler",
-      "pos": [
-        1468.197444428597,
-        1967.3578753408258
-      ],
-      "size": [
-        270,
-        106
-      ],
-      "flags": {},
-      "order": 19,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 1532
-        }
-      ],
-      "outputs": [
-        {
-          "name": "SIGMAS",
-          "type": "SIGMAS",
-          "links": [
-            1546
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.3.75",
-        "Node name for S&R": "BasicScheduler"
-      },
-      "widgets_values": [
-        "simple",
-        8,
-        1
-      ]
-    },
-    {
-      "id": 282,
-      "type": "EmptySD3LatentImage",
-      "pos": [
-        1457.637929257378,
-        2128.744799577045
-      ],
-      "size": [
-        260,
-        168
-      ],
-      "flags": {},
-      "order": 15,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "width",
-          "type": "INT",
-          "widget": {
-            "name": "width"
-          },
-          "link": 566
-        },
-        {
-          "name": "height",
-          "type": "INT",
-          "widget": {
-            "name": "height"
-          },
-          "link": 567
-        }
-      ],
-      "outputs": [
-        {
-          "name": "LATENT",
-          "type": "LATENT",
-          "slot_index": 0,
-          "links": [
-            1547
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.3.64",
-        "Node name for S&R": "EmptySD3LatentImage",
-        "enableTabs": false,
-        "tabWidth": 65,
-        "tabXOffset": 10,
-        "hasSecondTab": false,
-        "secondTabText": "Send Back",
-        "secondTabOffset": 80,
-        "secondTabWidth": 65
-      },
-      "widgets_values": [
-        1024,
-        1024,
-        1
-      ]
-    },
-    {
       "id": 261,
       "type": "VAELoader",
       "pos": [
@@ -416,7 +253,7 @@
         58
       ],
       "flags": {},
-      "order": 5,
+      "order": 3,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -450,7 +287,7 @@
         102.39426790580865
       ],
       "flags": {},
-      "order": 6,
+      "order": 4,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -473,29 +310,6 @@
       ]
     },
     {
-      "id": 611,
-      "type": "Note",
-      "pos": [
-        1138.7779877296477,
-        976.9595237013522
-      ],
-      "size": [
-        289.0740052806825,
-        112.57343506692268
-      ],
-      "flags": {},
-      "order": 7,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [],
-      "properties": {},
-      "widgets_values": [
-        "The only relevant values to change are :\n\n- high_scale_start: (between 1.0 and 1.15) \n- low_scale_end: (between 3.0 and 4.0)"
-      ],
-      "color": "#c09430",
-      "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
       "id": 607,
       "type": "CLIPTextEncode",
       "pos": [
@@ -507,7 +321,7 @@
         200
       ],
       "flags": {},
-      "order": 12,
+      "order": 11,
       "mode": 0,
       "inputs": [
         {
@@ -547,7 +361,7 @@
         200
       ],
       "flags": {},
-      "order": 13,
+      "order": 12,
       "mode": 0,
       "inputs": [
         {
@@ -586,7 +400,7 @@
         106
       ],
       "flags": {},
-      "order": 8,
+      "order": 5,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -622,7 +436,7 @@
         112.57343506692268
       ],
       "flags": {},
-      "order": 9,
+      "order": 6,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -645,7 +459,7 @@
         116.00450279158758
       ],
       "flags": {},
-      "order": 10,
+      "order": 7,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -705,6 +519,8 @@
         }
       ],
       "properties": {
+        "cnr_id": "untwistingrope",
+        "ver": "c9136fcced444ea84778a25a37a2b45371ea06a5",
         "Node name for S&R": "RFInversion"
       },
       "widgets_values": [
@@ -712,58 +528,6 @@
         0.1,
         2,
         1,
-        0.5,
-        false
-      ]
-    },
-    {
-      "id": 605,
-      "type": "UntwistingRoPE",
-      "pos": [
-        1130.3924191912731,
-        1145.830275642781
-      ],
-      "size": [
-        300.72558066302486,
-        275.79687400716375
-      ],
-      "flags": {},
-      "order": 17,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 1530
-        },
-        {
-          "name": "rf_inversion",
-          "shape": 7,
-          "type": "LATENT",
-          "link": 1537
-        }
-      ],
-      "outputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "links": [
-            1531,
-            1532
-          ]
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "UntwistingRoPE"
-      },
-      "widgets_values": [
-        50,
-        1.05,
-        0,
-        1,
-        3.5,
-        0,
-        999,
         0.5,
         false
       ]
@@ -900,6 +664,246 @@
         "Node name for S&R": "VAEDecode"
       },
       "widgets_values": []
+    },
+    {
+      "id": 612,
+      "type": "LoadImage",
+      "pos": [
+        -102.84151691065208,
+        1161.3938579968244
+      ],
+      "size": [
+        282.798828125,
+        314.00000000000006
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1539
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.21.1",
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ]
+    },
+    {
+      "id": 611,
+      "type": "Note",
+      "pos": [
+        1138.7779877296477,
+        976.9595237013522
+      ],
+      "size": [
+        289.0740052806825,
+        112.57343506692268
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "The only relevant values to change are :\n\n- high_scale_start: (between 1.0 and 1.15) \n- low_scale_end: (between 3.0 and 4.0)"
+      ],
+      "color": "#c09430",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 605,
+      "type": "UntwistingRoPE",
+      "pos": [
+        1130.3924191912731,
+        1145.830275642781
+      ],
+      "size": [
+        300.72558066302486,
+        275.79687400716375
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 1530
+        },
+        {
+          "name": "rf_inversion",
+          "shape": 7,
+          "type": "LATENT",
+          "link": 1537
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "links": [
+            1531,
+            1532
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "untwistingrope",
+        "ver": "c9136fcced444ea84778a25a37a2b45371ea06a5",
+        "Node name for S&R": "UntwistingRoPE"
+      },
+      "widgets_values": [
+        50,
+        1,
+        0,
+        1,
+        3,
+        0,
+        999,
+        0.5,
+        false
+      ]
+    },
+    {
+      "id": 615,
+      "type": "Note",
+      "pos": [
+        806.2680068432485,
+        995.1907751912114
+      ],
+      "size": [
+        289.0740052806825,
+        112.57343506692268
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "The quality of the style transfer depends largely on the quality of the RF inversion. These settings work well, but feel free to try other values."
+      ],
+      "color": "#c09430",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 31,
+      "type": "BasicScheduler",
+      "pos": [
+        1485.7528126778984,
+        1963.3681052602142
+      ],
+      "size": [
+        270,
+        106
+      ],
+      "flags": {},
+      "order": 19,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 1532
+        }
+      ],
+      "outputs": [
+        {
+          "name": "SIGMAS",
+          "type": "SIGMAS",
+          "links": [
+            1546
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.75",
+        "Node name for S&R": "BasicScheduler"
+      },
+      "widgets_values": [
+        "simple",
+        12,
+        1
+      ]
+    },
+    {
+      "id": 282,
+      "type": "EmptySD3LatentImage",
+      "pos": [
+        1495.1427323629832,
+        2118.3711928088187
+      ],
+      "size": [
+        260,
+        168
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": 566
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": 567
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "slot_index": 0,
+          "links": [
+            1547
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.64",
+        "Node name for S&R": "EmptySD3LatentImage",
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65
+      },
+      "widgets_values": [
+        1024,
+        1024,
+        1
+      ]
     }
   ],
   "links": [
@@ -1100,10 +1104,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.5559917313492245,
+      "scale": 0.379749833583244,
       "offset": [
-        -770.4004787316312,
-        -1113.416929579258
+        233.57522669297327,
+        -720.6203152921819
       ]
     },
     "frontendVersion": "1.43.18",
