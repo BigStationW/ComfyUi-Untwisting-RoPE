@@ -3,7 +3,9 @@ import math
 import types
 import hashlib
 import time
+import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from . import models as model_adapters
 import torch
 import comfy.utils
 import comfy.patcher_extension
@@ -15,6 +17,7 @@ from comfy.ldm.flux.math import apply_rope
 from comfy.ldm.modules.attention import optimized_attention_masked
 
 _PREFIX = '[UntwistingRoPE]'
+_TRANSFORMER_CONFIG_KEY = model_adapters.CONFIG_KEY
 
 # Module-level fallback store. Comfy/KSampler may clone or pass model objects
 # through different instances, so the export node reads this if the model-local
@@ -145,6 +148,8 @@ class _RuntimeStats:
         self.patchify_calls: int = 0
         self.attn_calls:     int = 0
         self.context_refiner_calls: int = 0
+        self.adapter_attn_calls: int = 0
+        self.adapter_attn_failures: int = 0
 
         self.rf_sigma_cache: Dict[float, torch.Tensor] = {}
         self.rf_eps: Optional[torch.Tensor] = None
@@ -172,6 +177,362 @@ def _vprint(stats: Optional[_RuntimeStats], *args, **kwargs) -> None:
 def _rf_vprint(stats: Optional[_RuntimeStats], *args, **kwargs) -> None:
     if stats is not None and _coerce_bool(getattr(stats, 'rf_verbose', False)):
         print(*args, **kwargs)
+
+
+def _rf_tensor_summary(name: str, value: Any) -> str:
+    """Compact tensor diagnostic string safe for dtype/device/empty tensors."""
+    if not torch.is_tensor(value):
+        return f'{name}=<{type(value).__name__}>'
+    try:
+        shape = tuple(int(v) for v in value.shape)
+        base = f'{name}: shape={shape} dtype={value.dtype} device={value.device}'
+        if value.numel() == 0:
+            return base + ' empty'
+        vf = value.detach().float()
+        return (
+            f'{base} mean={float(vf.mean().item()):.6f} '
+            f'std={float(vf.std(unbiased=False).item()):.6f} '
+            f'min={float(vf.min().item()):.6f} max={float(vf.max().item()):.6f}'
+        )
+    except Exception as exc:
+        return f'{name}: tensor-summary-failed shape={tuple(value.shape)} err={exc}'
+
+
+def _rf_sequence_summary(name: str, seq: Any, max_items: int = 8) -> str:
+    values = _coerce_sigma_sequence(seq)
+    if values is None:
+        return f'{name}=<none/invalid>'
+    head = ', '.join(f'{v:.6f}' for v in values[:max_items])
+    tail = ', '.join(f'{v:.6f}' for v in values[-max_items:])
+    if len(values) <= max_items * 2:
+        body = ', '.join(f'{v:.6f}' for v in values)
+    else:
+        body = f'{head}, ..., {tail}'
+    return f'{name}: count={len(values)} min={min(values):.6f} max={max(values):.6f} values=[{body}]'
+
+
+def _rf_brief_obj(obj: Any, depth: int = 0) -> str:
+    """Small structural summary for conditioning/debug dictionaries."""
+    if torch.is_tensor(obj):
+        return f'Tensor{tuple(obj.shape)}:{obj.dtype}:{obj.device}'
+    if obj is None:
+        return 'None'
+    if depth >= 2:
+        return type(obj).__name__
+    if isinstance(obj, dict):
+        items = []
+        for idx, (k, v) in enumerate(obj.items()):
+            if idx >= 12:
+                items.append('...')
+                break
+            items.append(f'{k}={_rf_brief_obj(v, depth + 1)}')
+        return '{' + ', '.join(items) + '}'
+    if isinstance(obj, (list, tuple)):
+        items = []
+        for idx, v in enumerate(obj):
+            if idx >= 8:
+                items.append('...')
+                break
+            items.append(_rf_brief_obj(v, depth + 1))
+        return f'{type(obj).__name__}[{len(obj)}](' + ', '.join(items) + ')'
+    return f'{type(obj).__name__}({repr(obj)[:80]})'
+
+
+
+def _rf_tensor_stats(value: Any) -> Dict[str, Any]:
+    """Numerical health stats used only for RF diagnostics."""
+    out: Dict[str, Any] = {
+        'is_tensor': torch.is_tensor(value),
+        'finite': False,
+        'numel': 0,
+        'nan_count': None,
+        'inf_count': None,
+        'mean': None,
+        'std': None,
+        'min': None,
+        'max': None,
+        'max_abs': None,
+    }
+    if not torch.is_tensor(value):
+        return out
+    try:
+        x = value.detach().float()
+        out['numel'] = int(x.numel())
+        if x.numel() == 0:
+            out['finite'] = True
+            return out
+        finite = torch.isfinite(x)
+        out['finite'] = bool(finite.all().item())
+        out['nan_count'] = int(torch.isnan(x).sum().item())
+        out['inf_count'] = int(torch.isinf(x).sum().item())
+        xf = x[finite]
+        if xf.numel() == 0:
+            return out
+        out['mean'] = float(xf.mean().item())
+        out['std'] = float(xf.std(unbiased=False).item())
+        out['min'] = float(xf.min().item())
+        out['max'] = float(xf.max().item())
+        out['max_abs'] = float(xf.abs().max().item())
+    except Exception as exc:
+        out['error'] = repr(exc)
+    return out
+
+
+def _rf_scalar_fmt(value: Any, digits: int = 6) -> str:
+    try:
+        if value is None:
+            return 'n/a'
+        value = float(value)
+        if not math.isfinite(value):
+            return str(value)
+        return f'{value:.{digits}f}'
+    except Exception:
+        return 'n/a'
+
+
+def _rf_tensor_mae(a: Any, b: Any) -> Optional[float]:
+    if not (torch.is_tensor(a) and torch.is_tensor(b)):
+        return None
+    try:
+        aa = a.detach().float().to(device='cpu')
+        bb = b.detach().float().to(device='cpu')
+        if aa.shape != bb.shape or aa.numel() == 0:
+            return None
+        return float((aa - bb).abs().mean().item())
+    except Exception:
+        return None
+
+
+def _rf_tensor_rmse(a: Any, b: Any) -> Optional[float]:
+    if not (torch.is_tensor(a) and torch.is_tensor(b)):
+        return None
+    try:
+        aa = a.detach().float().to(device='cpu')
+        bb = b.detach().float().to(device='cpu')
+        if aa.shape != bb.shape or aa.numel() == 0:
+            return None
+        return float((aa - bb).pow(2).mean().sqrt().item())
+    except Exception:
+        return None
+
+
+def _rf_tensor_cosine(a: Any, b: Any) -> Optional[float]:
+    if not (torch.is_tensor(a) and torch.is_tensor(b)):
+        return None
+    try:
+        aa = a.detach().float().flatten().to(device='cpu')
+        bb = b.detach().float().flatten().to(device='cpu')
+        if aa.shape != bb.shape or aa.numel() == 0:
+            return None
+        denom = aa.norm() * bb.norm()
+        if float(denom.item()) <= 1e-12:
+            return None
+        return float(torch.dot(aa, bb).div(denom).item())
+    except Exception:
+        return None
+
+
+def _rf_diagnostic_level(summary: Dict[str, Any]) -> str:
+    """Return a conservative numerical-health classification for the RF trajectory."""
+    if not summary.get('finite_all', False):
+        return 'FAIL'
+    final_std = summary.get('final_std')
+    final_max_abs = summary.get('final_max_abs')
+    final_eps_std_ratio = summary.get('final_eps_std_ratio')
+
+    # These thresholds are intentionally broad and only detect numerical collapse/divergence,
+    # not subjective image quality or semantic faithfulness.
+    try:
+        if final_std is not None and float(final_std) < 0.05:
+            return 'FAIL'
+        if final_std is not None and float(final_std) > 20.0:
+            return 'FAIL'
+        if final_max_abs is not None and float(final_max_abs) > 100.0:
+            return 'FAIL'
+        if final_eps_std_ratio is not None and (
+            float(final_eps_std_ratio) < 0.25 or float(final_eps_std_ratio) > 4.0
+        ):
+            return 'WARN'
+    except Exception:
+        return 'WARN'
+    return 'PASS'
+
+
+def _rf_stability_summary(
+    ref_clean: torch.Tensor,
+    eps: torch.Tensor,
+    cache: Dict[float, torch.Tensor],
+    sigmas: List[float],
+) -> Dict[str, Any]:
+    """Collect explicit RF trajectory sanity metrics without changing sampling."""
+    keys = sorted(float(k) for k in cache.keys() if isinstance(k, (int, float)))
+    summary: Dict[str, Any] = {
+        'cache_items': len(cache),
+        'sigmas': len(sigmas or []),
+        'first_sigma': keys[0] if keys else None,
+        'last_sigma': keys[-1] if keys else None,
+        'finite_all': True,
+        'level': 'WARN',
+        'warnings': [],
+    }
+    if not keys:
+        summary['finite_all'] = False
+        summary['warnings'].append('cache_empty')
+        summary['level'] = 'FAIL'
+        return summary
+
+    stds: List[float] = []
+    max_abs_values: List[float] = []
+    bad_keys: List[float] = []
+    prev_tensor: Optional[torch.Tensor] = None
+    dz_values: List[float] = []
+
+    for k in keys:
+        t = cache.get(k)
+        st = _rf_tensor_stats(t)
+        if not st.get('finite', False):
+            bad_keys.append(k)
+            summary['finite_all'] = False
+        if st.get('std') is not None:
+            stds.append(float(st['std']))
+        if st.get('max_abs') is not None:
+            max_abs_values.append(float(st['max_abs']))
+        if torch.is_tensor(prev_tensor) and torch.is_tensor(t) and prev_tensor.shape == t.shape:
+            try:
+                dz_values.append(float((t.detach().float() - prev_tensor.detach().float()).abs().mean().item()))
+            except Exception:
+                pass
+        prev_tensor = t if torch.is_tensor(t) else None
+
+    first = cache.get(keys[0])
+    final = cache.get(keys[-1])
+    first_stats = _rf_tensor_stats(first)
+    final_stats = _rf_tensor_stats(final)
+    eps_stats = _rf_tensor_stats(eps)
+    ref_stats = _rf_tensor_stats(ref_clean)
+
+    summary.update({
+        'bad_sigma_keys': bad_keys[:16],
+        'std_min': min(stds) if stds else None,
+        'std_max': max(stds) if stds else None,
+        'max_abs_max': max(max_abs_values) if max_abs_values else None,
+        'dz_mean': (sum(dz_values) / len(dz_values)) if dz_values else None,
+        'dz_max': max(dz_values) if dz_values else None,
+        'ref_std': ref_stats.get('std'),
+        'eps_std': eps_stats.get('std'),
+        'first_std': first_stats.get('std'),
+        'final_std': final_stats.get('std'),
+        'final_mean': final_stats.get('mean'),
+        'final_min': final_stats.get('min'),
+        'final_max': final_stats.get('max'),
+        'final_max_abs': final_stats.get('max_abs'),
+        'first_vs_ref_mae': _rf_tensor_mae(first, ref_clean),
+        'final_vs_eps_mae': _rf_tensor_mae(final, eps),
+        'final_vs_eps_rmse': _rf_tensor_rmse(final, eps),
+        'final_vs_eps_cosine': _rf_tensor_cosine(final, eps),
+    })
+
+    try:
+        eps_std = summary.get('eps_std')
+        final_std = summary.get('final_std')
+        if eps_std is not None and float(eps_std) > 1e-12 and final_std is not None:
+            summary['final_eps_std_ratio'] = float(final_std) / float(eps_std)
+        else:
+            summary['final_eps_std_ratio'] = None
+    except Exception:
+        summary['final_eps_std_ratio'] = None
+
+    if bad_keys:
+        summary['warnings'].append('nonfinite_values')
+    if summary.get('first_vs_ref_mae') is not None and float(summary['first_vs_ref_mae']) > 1e-4:
+        summary['warnings'].append('cache_sigma0_not_reference')
+    summary['level'] = _rf_diagnostic_level(summary)
+    return summary
+
+
+def _rf_print_stability_summary(summary: Dict[str, Any]) -> None:
+    level = summary.get('level', 'WARN')
+    print(f'{_PREFIX}   RF numerical sanity: {level}')
+    print(
+        f'{_PREFIX}     cache_items={summary.get("cache_items")}  '
+        f'sigmas={summary.get("sigmas")}  '
+        f'first_sigma={_rf_scalar_fmt(summary.get("first_sigma"))}  '
+        f'last_sigma={_rf_scalar_fmt(summary.get("last_sigma"))}  '
+        f'finite_all={summary.get("finite_all")}'
+    )
+    print(
+        f'{_PREFIX}     std: ref={_rf_scalar_fmt(summary.get("ref_std"))}  '
+        f'first={_rf_scalar_fmt(summary.get("first_std"))}  '
+        f'final={_rf_scalar_fmt(summary.get("final_std"))}  '
+        f'eps={_rf_scalar_fmt(summary.get("eps_std"))}  '
+        f'final/eps={_rf_scalar_fmt(summary.get("final_eps_std_ratio"))}  '
+        f'range=[{_rf_scalar_fmt(summary.get("std_min"))}, {_rf_scalar_fmt(summary.get("std_max"))}]'
+    )
+    print(
+        f'{_PREFIX}     final: mean={_rf_scalar_fmt(summary.get("final_mean"))}  '
+        f'min={_rf_scalar_fmt(summary.get("final_min"))}  '
+        f'max={_rf_scalar_fmt(summary.get("final_max"))}  '
+        f'max_abs={_rf_scalar_fmt(summary.get("final_max_abs"))}  '
+        f'max_abs_over_path={_rf_scalar_fmt(summary.get("max_abs_max"))}'
+    )
+    print(
+        f'{_PREFIX}     deltas: mean|Δz|={_rf_scalar_fmt(summary.get("dz_mean"))}  '
+        f'max|Δz|={_rf_scalar_fmt(summary.get("dz_max"))}  '
+        f'first_vs_ref_mae={_rf_scalar_fmt(summary.get("first_vs_ref_mae"))}  '
+        f'final_vs_eps_mae={_rf_scalar_fmt(summary.get("final_vs_eps_mae"))}  '
+        f'final_vs_eps_rmse={_rf_scalar_fmt(summary.get("final_vs_eps_rmse"))}  '
+        f'final_vs_eps_cos={_rf_scalar_fmt(summary.get("final_vs_eps_cosine"))}'
+    )
+    warnings = summary.get('warnings') or []
+    if warnings:
+        print(f'{_PREFIX}     warnings={warnings} bad_sigma_keys={summary.get("bad_sigma_keys", [])}')
+    if level != 'PASS':
+        print(
+            f'{_PREFIX}   ⚠ RF numerical sanity did not PASS. This is a diagnostic flag only; '
+            f'it means inspect the printed stats and the generated image before trusting the run.'
+        )
+    else:
+        print(
+            f'{_PREFIX}   RF numerical sanity PASS only means no obvious numeric collapse/divergence; '
+            f'it does not prove visual/semantic quality.'
+        )
+
+
+def _rf_model_identity(model_patcher: Any) -> Dict[str, Any]:
+    """Best-effort model identity diagnostics; never used for math decisions."""
+    base = getattr(model_patcher, 'model', model_patcher)
+    diffusion_model = getattr(base, 'diffusion_model', None)
+    model_config = getattr(base, 'model_config', None)
+    unet_config = getattr(model_config, 'unet_config', None)
+    if not isinstance(unet_config, dict):
+        unet_config = {}
+    model_type = getattr(base, 'model_type', None)
+    model_sampling = getattr(base, 'model_sampling', None)
+    latent_format = getattr(base, 'latent_format', None)
+    info = {
+        'base_class': type(base).__name__ if base is not None else 'None',
+        'diffusion_class': type(diffusion_model).__name__ if diffusion_model is not None else 'None',
+        'diffusion_module': getattr(type(diffusion_model), '__module__', '') if diffusion_model is not None else '',
+        'model_type': getattr(model_type, 'name', str(model_type)),
+        'model_sampling_class': type(model_sampling).__name__ if model_sampling is not None else 'None',
+        'latent_format_class': type(latent_format).__name__ if latent_format is not None else 'None',
+        'image_model': unet_config.get('image_model', None),
+        'in_channels': unet_config.get('in_channels', None),
+        'out_channels': unet_config.get('out_channels', None),
+    }
+    return info
+
+
+def _rf_print_model_identity(prefix: str, info: Dict[str, Any]) -> None:
+    print(
+        f'{prefix} model_info: base={info.get("base_class")} '
+        f'diffusion={info.get("diffusion_module")}.{info.get("diffusion_class")} '
+        f'image_model={info.get("image_model")} adapter={info.get("architecture_name", info.get("architecture", "unknown"))}\n'
+        f'{prefix} model_type={info.get("model_type")} '
+        f'sampling={info.get("model_sampling_class")} '
+        f'latent_format={info.get("latent_format_class")} '
+        f'in_channels={info.get("in_channels")} out_channels={info.get("out_channels")}'
+    )
 
 
 def _rf_step_iterator(num_steps: int):
@@ -227,14 +588,22 @@ def _velocity_from_pred(
     parameterization: str,
 ) -> torch.Tensor:
     """
-    Convert apply_model output to a velocity field regardless of parameterization.
+    Convert ComfyUI ``model.apply_model`` output into the RF velocity dx/dsigma.
+
+    ComfyUI's model_function_wrapper receives ``model.apply_model``. In current
+    ComfyUI, BaseModel._apply_model returns ``model_sampling.calculate_denoised``;
+    for supported rectified-flow models this is a denoised/x0-style tensor, not the raw transformer
+    velocity. Therefore RF inversion must recover velocity from x_sigma and x0.
+
+    Only the explicit opt-in label ``raw_velocity`` is treated as already being
+    a velocity. RFInversion itself does not set that label.
     """
-    if parameterization == 'x0':
-        return (x_sigma - pred) / max(float(sigma), 1e-7)
-    
-    # ComfyUI natively normalizes all velocity models (FLOW and V_PREDICTION) 
-    # to output the standard eps - x0 direction. No negation is needed.
-    return pred
+    mode = str(parameterization or 'x0').lower()
+    if mode in ('raw_velocity', 'velocity_raw', 'model_velocity'):
+        return pred
+
+    sigma_f = max(float(sigma), 1e-7)
+    return (x_sigma - pred) / sigma_f
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # RF utility helpers
@@ -767,41 +1136,15 @@ def _find_sigma_schedule(obj: Any, depth: int = 0) -> Optional[List[float]]:
 # Utility helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _safe_get_diffusion_model(model_patcher: Any) -> Any:
-    roots = []
-    if hasattr(model_patcher, 'model'):
-        roots.append(model_patcher.model)
-    roots.append(model_patcher)
-    attr_paths = [
-        'diffusion_model', 'model.diffusion_model',
-        'model.model.diffusion_model', 'inner_model.diffusion_model',
-        'model.inner_model.diffusion_model',
-    ]
-    for root in roots:
-        for path in attr_paths:
-            obj, ok = root, True
-            for part in path.split('.'):
-                if not hasattr(obj, part):
-                    ok = False; break
-                obj = getattr(obj, part)
-            if ok and hasattr(obj, 'patchify_and_embed') and hasattr(obj, 'layers'):
-                return obj
-    seen: set = set()
-    stack = roots[:]
-    while stack and len(seen) < 256:
-        obj = stack.pop()
-        if id(obj) in seen:
-            continue
-        seen.add(id(obj))
-        if hasattr(obj, 'patchify_and_embed') and hasattr(obj, 'layers'):
-            return obj
-        for name in ('model', 'inner_model', 'diffusion_model', 'unet', 'wrapped'):
-            if hasattr(obj, name):
-                try:
-                    stack.append(getattr(obj, name))
-                except Exception:
-                    pass
-    raise RuntimeError('Could not find Z-Image/NextDiT diffusion model.')
+def _select_model_adapter(model_patcher: Any, model_info: Optional[Dict[str, Any]] = None) -> Any:
+    adapter = model_adapters.identify(model_patcher, model_info or {})
+    if isinstance(model_info, dict):
+        model_info['architecture'] = model_adapters.adapter_key(adapter)
+        model_info['architecture_name'] = model_adapters.adapter_label(adapter)
+    return adapter
+
+def _safe_get_diffusion_model(model_patcher: Any, adapter: Any) -> Any:
+    return adapter.find_diffusion_model(model_patcher)
 
 def _repeat_to_batch(x: torch.Tensor, batch: int) -> torch.Tensor:
     if x.shape[0] == batch:
@@ -821,7 +1164,7 @@ def _clone_conditioning_for_rf(c: Dict[str, Any]) -> Dict[str, Any]:
     to  = out.get('transformer_options', {})
     if isinstance(to, dict):
         to = to.copy()
-        to.pop('untwisting_rope_zimage', None)
+        to.pop(_TRANSFORMER_CONFIG_KEY, None)
         out['transformer_options'] = to
     else:
         out['transformer_options'] = {}
@@ -976,6 +1319,7 @@ def _extract_reference_conditioning(ref_conditioning: Any) -> Tuple[Optional[tor
                 return cond, merged_meta
         return None, merged_meta
     return None, {}
+
 
 def _meta_get(meta: Dict[str, Any], key: str) -> Any:
     for alias in _CONDITIONING_META_ALIASES.get(key, (key,)):
@@ -1357,26 +1701,17 @@ def _repeat_kv_heads_if_needed(k, v, q_heads):
 # Architecture detection
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_ACTIVE_MODEL_ADAPTER: Any = None
+
 def _is_joint_attention(m):
-    return (
-        hasattr(m, 'qkv') and hasattr(m, 'out')
-        and hasattr(m, 'q_norm') and hasattr(m, 'k_norm')
-        and hasattr(m, 'n_local_heads') and hasattr(m, 'n_local_kv_heads')
-        and hasattr(m, 'head_dim')
-        and callable(getattr(m, 'forward', None))
-    )
+    adapter = _ACTIVE_MODEL_ADAPTER
+    fn = getattr(adapter, 'is_joint_attention', None)
+    return bool(callable(fn) and fn(m))
 
 def _is_main_layers_attention_name(name, min_layer=0, max_layer=29):
-    parts = name.split('.')
-    if len(parts) != 3:
-        return False
-    if parts[0] != 'layers' or parts[2] != 'attention':
-        return False
-    try:
-        idx = int(parts[1])
-    except Exception:
-        return False
-    return min_layer <= idx <= max_layer
+    adapter = _ACTIVE_MODEL_ADAPTER
+    fn = getattr(adapter, 'is_attention_name', None)
+    return bool(callable(fn) and fn(name, min_layer, max_layer))
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Context-refiner cap_mask patch
@@ -1408,7 +1743,7 @@ def _patch_context_refiner_mask_modules(dm, stats):
                 if transformer_options is None and len(args) >= 4 and isinstance(args[3], dict):
                     transformer_options = args[3]
                 cfg = (
-                    transformer_options.get('untwisting_rope_zimage')
+                    transformer_options.get(_TRANSFORMER_CONFIG_KEY)
                     if isinstance(transformer_options, dict) else None
                 )
                 forced_cap_mask = (
@@ -1480,7 +1815,7 @@ def _patch_patchify_and_embed(dm, stats):
                 transformer_options={}, *args, **kwargs):
 
         cfg_pre = (
-            transformer_options.get('untwisting_rope_zimage')
+            transformer_options.get(_TRANSFORMER_CONFIG_KEY)
             if isinstance(transformer_options, dict) else None
         )
         forced_cap_mask = (
@@ -1504,7 +1839,7 @@ def _patch_patchify_and_embed(dm, stats):
 
         try:
             img, mask, img_size, cap_size, freqs_cis, timestep_zero_index = result
-            cfg = transformer_options.get('untwisting_rope_zimage')
+            cfg = transformer_options.get(_TRANSFORMER_CONFIG_KEY)
             if not cfg or not cfg.get('enabled'):
                 return result
 
@@ -1570,7 +1905,7 @@ def _patch_patchify_and_embed(dm, stats):
                         mask   = joint_mask
                         result = (img, mask, img_size, cap_size, freqs_cis, timestep_zero_index)
 
-            transformer_options['untwisting_rope_zimage'] = cfg
+            transformer_options[_TRANSFORMER_CONFIG_KEY] = cfg
         except Exception:
             pass
 
@@ -1607,7 +1942,7 @@ def _patch_joint_attention_modules(dm, stats):
         def make_forward(orig, module_name):
             def patched_forward(self, x, x_mask, freqs_cis, transformer_options={}):
                 cfg = (
-                    transformer_options.get('untwisting_rope_zimage')
+                    transformer_options.get(_TRANSFORMER_CONFIG_KEY)
                     if isinstance(transformer_options, dict) else None
                 )
                 if not cfg or not cfg.get('enabled'):
@@ -1785,6 +2120,13 @@ def _rf_new_debug_store() -> Dict[str, Any]:
         'persistent_cache_key': None,
         'persistent_cache_hit': False,
         'parameterization': 'unknown',
+        'apply_model_output': 'comfy_denoised_x0',
+        'model_info': {},
+        'wrapper_calls': 0,
+        'last_sigma': None,
+        'last_cond_mode': None,
+        'last_cache_lookup': None,
+        'last_error': None,
     })
     return debug_store
 
@@ -1838,6 +2180,38 @@ def _rf_latent_get_config(rf_inversion: Optional[Dict[str, Any]]) -> Tuple[bool,
     if not torch.is_tensor(ref_clean):
         return False, cfg, state, None, ref_conditioning, 'missing-ref-clean'
     return True, cfg, state, ref_clean, ref_conditioning, 'RFInversion LATENT'
+
+
+def _adapter_helpers() -> Dict[str, Any]:
+    return {
+        'prefix': _PREFIX,
+        'config_key': _TRANSFORMER_CONFIG_KEY,
+        'lerp': _lerp,
+        'cross_batch_adain_qk': _cross_batch_adain_qk,
+        'build_frequency_scale_vector': _build_frequency_scale_vector,
+        'patch_context_refiner_mask_modules': _patch_context_refiner_mask_modules,
+        'patch_patchify_and_embed': _patch_patchify_and_embed,
+        'patch_joint_attention_modules': _patch_joint_attention_modules,
+    }
+
+def _prepare_reference_conditioning_for_adapter(
+    adapter: Any,
+    ref_conditioning: Any,
+    dm: Any,
+    device,
+    dtype,
+    stats: Optional[_RuntimeStats] = None,
+    label: str = '',
+) -> Tuple[Any, str]:
+    fn = getattr(adapter, 'prepare_reference_conditioning', None)
+    if not callable(fn):
+        return ref_conditioning, 'not-applicable'
+    return fn(ref_conditioning, dm, device, dtype, stats, label=label, helpers=_adapter_helpers())
+
+def _append_conditioning_status(mode: str, status: str) -> str:
+    if status and status != 'not-applicable':
+        return f'{mode};{status}'
+    return mode
 
 class RFInversion:
     CATEGORY = 'model_patches/Untwisting RoPE'
@@ -1896,18 +2270,18 @@ class RFInversion:
         ref_clean = reference_latent['samples'].detach().clone()
         ref_clean = model.model.process_latent_in(ref_clean)
 
-        # Directly ask ComfyUI what kind of model this is
-        detected_param = 'unknown'
+        # model_function_wrapper is passed ComfyUI model.apply_model, which returns
+        # the denoised/x0-style prediction after model_sampling.calculate_denoised.
+        # Keep the raw model type only as diagnostics; RF velocity conversion uses x0.
+        model_info = _rf_model_identity(model)
+        adapter = _select_model_adapter(model, model_info)
+        detected_param = 'x0'
+        dm_for_ref = None
         try:
-            m_type = str(getattr(model.model, 'model_type', ''))
-            if 'FLOW' in m_type:
-                detected_param = 'flow_velocity'
-            elif 'V_PREDICTION' in m_type:
-                detected_param = 'velocity'
-            elif 'X0' in m_type:
-                detected_param = 'x0'
-        except Exception:
-            pass
+            dm_for_ref = _safe_get_diffusion_model(model, adapter)
+        except Exception as exc:
+            if verbose_flag:
+                print(f'{_PREFIX} ⚠ Could not access diffusion model for reference conditioning preprocessing: {exc}')
 
         cfg: Dict[str, Any] = {
             'rf_mode': str(rf_mode),
@@ -1917,6 +2291,8 @@ class RFInversion:
             'pmi_alpha': float(pmi_alpha),
             'seed': 42,
             'verbose': verbose_flag,
+            'apply_model_output': 'comfy_denoised_x0',
+            'model_info': model_info,
         }
         state: Dict[str, Any] = {
             'cache': {0.0: ref_clean.detach().to(device='cpu').clone()},
@@ -1930,10 +2306,18 @@ class RFInversion:
             'persistent_cache_key': None,
             'persistent_cache_hit': False,
             'preview_callback': None,
+            'wrapper_calls': 0,
+            'model_info': model_info,
+            'last_sigma': None,
+            'last_cond_mode': None,
+            'last_cache_lookup': None,
+            'last_error': None,
         }
         debug_store = _rf_new_debug_store()
         debug_store['cache'] = state['cache']
         debug_store['parameterization'] = detected_param
+        debug_store['apply_model_output'] = cfg['apply_model_output']
+        debug_store['model_info'] = model_info
 
         # Normal LATENT output: samples stay a latent tensor; extra keys carry RF metadata.
         rf_latent: Dict[str, Any] = dict(reference_latent)
@@ -1945,6 +2329,8 @@ class RFInversion:
         rf_latent['untwist_rf_mode'] = str(rf_mode)
         rf_latent['untwist_rf_seed'] = 42
         rf_latent['untwist_rf_parameterization'] = detected_param
+        rf_latent['untwist_rf_apply_model_output'] = cfg['apply_model_output']
+        rf_latent['untwist_rf_model_info'] = model_info
         rf_latent['untwist_ref_clean'] = ref_clean.detach().to(device='cpu').clone()
         rf_latent['untwist_ref_conditioning'] = ref_conditioning
 
@@ -1995,6 +2381,211 @@ class RFInversion:
             is_model_options=True,
         )
 
+        # RFInversion must be able to run by itself. The original code only
+        # captured sampler sigmas here; the trajectory was built later inside
+        # UntwistingRoPE.patch, which is architecture-specific. This wrapper
+        # builds the RF cache during the normal sampler model calls and then
+        # returns the original model prediction unchanged.
+        old_model_function_wrapper = model_clone.model_options.get('model_function_wrapper', None)
+        rf_runtime_stats = _RuntimeStats(verbose=False, rf_verbose=verbose_flag)
+        rf_runtime_stats.parameterization = detected_param
+
+        def rf_model_function_wrapper(apply_model: Callable, args: Dict[str, Any]) -> torch.Tensor:
+            state['wrapper_calls'] = int(state.get('wrapper_calls', 0)) + 1
+            call_n = int(state['wrapper_calls'])
+            debug_store['wrapper_calls'] = call_n
+
+            input_x = args.get('input', None)
+            timestep = args.get('timestep', None)
+            c_in = args.get('c', {})
+            c = c_in.copy() if isinstance(c_in, dict) else {}
+            sigma = _sigma_from_timestep(timestep) if torch.is_tensor(timestep) else 1.0
+            sigma_key = round(float(sigma), 6)
+            state['last_sigma'] = sigma_key
+            debug_store['last_sigma'] = sigma_key
+
+            try:
+                if not torch.is_tensor(input_x):
+                    raise RuntimeError('RFInversion wrapper received a non-tensor input.')
+
+                target_b = int(input_x.shape[0])
+                rf_ref_clean = _repeat_to_batch(ref_clean.to(device=input_x.device, dtype=input_x.dtype), target_b)
+                sampler_sigmas = state.get('sampler_sigmas', None)
+
+                # Build the full sampler-grid RF trajectory once per sampler run.
+                if not state.get('schedule_built', False) and sampler_sigmas is not None:
+                    effective_ref_conditioning, adapter_ref_status = _prepare_reference_conditioning_for_adapter(
+                        adapter, ref_conditioning, dm_for_ref, input_x.device,
+                        c.get('c_crossattn').dtype if torch.is_tensor(c.get('c_crossattn', None)) else input_x.dtype,
+                        rf_runtime_stats, label='RFInversion',
+                    )
+                    rf_kwargs, rf_cond_mode = _build_rf_conditioning_kwargs(c, effective_ref_conditioning, target_b)
+                    rf_cond_mode = _append_conditioning_status(rf_cond_mode, adapter_ref_status)
+                    state['last_cond_mode'] = rf_cond_mode
+                    debug_store['last_cond_mode'] = rf_cond_mode
+
+                    cache_key = _make_rf_persistent_key(
+                        ref_clean=ref_clean.detach().to(device='cpu'),
+                        ref_conditioning=ref_conditioning,
+                        sampler_sigmas=list(sampler_sigmas),
+                        target_b=target_b,
+                        rf_mode=rf_mode,
+                        gamma=gamma,
+                        gamma_curve=gamma_curve,
+                        norm_strength=norm_strength,
+                        cond_mode=rf_cond_mode,
+                        pmi_alpha=pmi_alpha,
+                    )
+
+                    if verbose_flag:
+                        print(f'{_PREFIX}   RF build requested from RFInversion wrapper')
+                        print(f'{_PREFIX}   {_rf_sequence_summary("sampler_sigmas", sampler_sigmas)}')
+                        print(f'{_PREFIX}   target_b={target_b} cond_mode={rf_cond_mode} cache_key={cache_key[:12]}')
+                        print(f'{_PREFIX}   rf_ref_clean: {_rf_tensor_summary("rf_ref_clean", rf_ref_clean)}')
+                        print(f'{_PREFIX}   rf_kwargs summary: {_rf_brief_obj(rf_kwargs)}')
+
+                    cached_entry = _RF_PERSISTENT_TRAJECTORY_CACHE.get(cache_key)
+                    if cached_entry is not None:
+                        built_cache = _cache_to_device(cached_entry['cache'], input_x.device, input_x.dtype)
+                        eps = cached_entry['eps'].to(device=input_x.device, dtype=input_x.dtype)
+                        sorted_sigmas = list(cached_entry['built_sigmas'])
+                        state['persistent_cache_hit'] = True
+                        if verbose_flag:
+                            print(f'{_PREFIX}   RF persistent cache HIT key={cache_key[:12]} cache_items={len(built_cache)}')
+                    else:
+                        state['persistent_cache_hit'] = False
+                        preview_callback = state.get('preview_callback', None)
+                        if preview_callback is None:
+                            preview_callback = _rf_make_preview_callback(model_clone, max(1, len(list(sampler_sigmas)) - 1))
+                            state['preview_callback'] = preview_callback
+                        if verbose_flag:
+                            print(f'{_PREFIX}   RF persistent cache MISS key={cache_key[:12]} → building now')
+                        built_cache, eps, sorted_sigmas = _rf_build_cache_from_sampler_sigmas(
+                            ref_clean=rf_ref_clean,
+                            sampler_sigmas=list(sampler_sigmas),
+                            apply_model_fn=apply_model,
+                            base_model_kwargs=rf_kwargs,
+                            gamma=gamma,
+                            seed=42,
+                            stats=rf_runtime_stats,
+                            eps=state['eps'].to(device=input_x.device, dtype=input_x.dtype)
+                                if torch.is_tensor(state.get('eps', None)) else None,
+                            rf_mode=rf_mode,
+                            gamma_curve=gamma_curve,
+                            norm_strength=norm_strength,
+                            pmi_alpha=pmi_alpha,
+                            preview_callback=preview_callback,
+                        )
+                        _put_persistent_rf_cache(cache_key, {
+                            'cache': _cache_to_cpu(built_cache),
+                            'eps': eps.detach().to(device='cpu').clone(),
+                            'built_sigmas': list(sorted_sigmas),
+                        })
+
+                    state['cache'] = built_cache
+                    state['eps'] = eps.detach().clone()
+                    state['schedule_sorted'] = list(sorted_sigmas)
+                    state['schedule_built'] = True
+                    state['persistent_cache_key'] = cache_key
+                    rf_latent['untwist_rf_cache'] = _cache_to_cpu(built_cache)
+                    rf_latent['untwist_rf_eps'] = eps.detach().to(device='cpu').clone()
+                    rf_latent['untwist_rf_sigmas'] = list(sorted_sigmas)
+                    rf_latent['untwist_rf_state'] = state
+
+                    debug_store['cache'] = state['cache']
+                    debug_store['sampler_sigmas'] = list(sampler_sigmas)
+                    debug_store['built_sigmas'] = list(sorted_sigmas)
+                    debug_store['persistent_cache_key'] = cache_key
+                    debug_store['persistent_cache_hit'] = bool(state.get('persistent_cache_hit', False))
+                    debug_store['parameterization'] = detected_param
+                    debug_store['apply_model_output'] = cfg['apply_model_output']
+                    debug_store['model_info'] = model_info
+
+                    rf_sanity = _rf_stability_summary(rf_ref_clean, eps, built_cache, list(sorted_sigmas))
+                    state['last_stability_summary'] = rf_sanity
+                    rf_latent['untwist_rf_stability_summary'] = rf_sanity
+                    debug_store['stability_summary'] = rf_sanity
+
+                    if verbose_flag:
+                        print(
+                            f'{_PREFIX}   RF build complete: cache_items={len(built_cache)} '
+                            f'built_sigmas={len(sorted_sigmas)} eps={_rf_tensor_summary("eps", eps)}'
+                        )
+                        _rf_print_stability_summary(rf_sanity)
+
+                elif not state.get('schedule_built', False) and sampler_sigmas is None:
+                    # This should be rare because SAMPLER_SAMPLE normally runs before
+                    # model calls. Keep it as an explicit diagnostic fallback.
+                    effective_ref_conditioning, adapter_ref_status = _prepare_reference_conditioning_for_adapter(
+                        adapter, ref_conditioning, dm_for_ref, input_x.device,
+                        c.get('c_crossattn').dtype if torch.is_tensor(c.get('c_crossattn', None)) else input_x.dtype,
+                        rf_runtime_stats, label='RFInversionFallback',
+                    )
+                    rf_kwargs, rf_cond_mode = _build_rf_conditioning_kwargs(c, effective_ref_conditioning, target_b)
+                    rf_cond_mode = _append_conditioning_status(rf_cond_mode, adapter_ref_status)
+                    state['last_cond_mode'] = rf_cond_mode
+                    debug_store['last_cond_mode'] = rf_cond_mode
+                    if verbose_flag:
+                        print(f'{_PREFIX}   ⚠ No sampler sigmas captured yet; direct one-step RF fallback for σ={sigma:.6f}')
+                    z_sigma, eps = _rf_increment_reference_one_step(
+                        z_prev=rf_ref_clean,
+                        sigma_prev=0.0,
+                        sigma_cur=sigma,
+                        apply_model_fn=apply_model,
+                        base_model_kwargs=rf_kwargs,
+                        gamma=gamma,
+                        seed=42,
+                        stats=rf_runtime_stats,
+                        eps=state['eps'].to(device=input_x.device, dtype=input_x.dtype)
+                            if torch.is_tensor(state.get('eps', None)) else None,
+                        rf_mode=rf_mode,
+                        gamma_curve=gamma_curve,
+                        norm_strength=norm_strength,
+                        preview_callback=state.get('preview_callback', None),
+                    )
+                    cache = state.get('cache') if isinstance(state.get('cache'), dict) else {}
+                    cache[sigma_key] = z_sigma.detach().clone()
+                    state['cache'] = cache
+                    state['eps'] = eps.detach().clone()
+                    rf_latent['untwist_rf_cache'] = _cache_to_cpu(cache)
+                    rf_latent['untwist_rf_eps'] = eps.detach().to(device='cpu').clone()
+                    debug_store['cache'] = state['cache']
+                    if torch.is_tensor(state.get('eps', None)):
+                        rf_sanity = _rf_stability_summary(rf_ref_clean, state['eps'], cache, sorted(cache.keys()))
+                        state['last_stability_summary'] = rf_sanity
+                        rf_latent['untwist_rf_stability_summary'] = rf_sanity
+                        debug_store['stability_summary'] = rf_sanity
+                        if verbose_flag:
+                            _rf_print_stability_summary(rf_sanity)
+
+                cache = state.get('cache') if isinstance(state.get('cache'), dict) else {}
+                cached = cache.get(sigma_key, None)
+                cache_lookup = 'exact' if cached is not None else 'missing'
+                if cached is None:
+                    keys = [k for k in cache.keys() if isinstance(k, float)]
+                    if keys:
+                        nearest = min(keys, key=lambda k: abs(k - sigma_key))
+                        cached = cache.get(nearest)
+                        cache_lookup = f'nearest:{nearest:.6f}:absdiff={abs(nearest - sigma_key):.6f}'
+                state['last_cache_lookup'] = cache_lookup
+                debug_store['last_cache_lookup'] = cache_lookup
+
+                if verbose_flag:
+                    pass
+
+            except Exception as exc:
+                state['last_error'] = repr(exc)
+                debug_store['last_error'] = repr(exc)
+                print(f'{_PREFIX} ⚠ RFInversion standalone wrapper failed; sampling will continue unchanged: {exc}')
+                if verbose_flag:
+                    print(traceback.format_exc())
+
+            if old_model_function_wrapper is not None:
+                return old_model_function_wrapper(apply_model, args)
+            return apply_model(args['input'], args['timestep'], **args['c'])
+
+        model_clone.set_model_unet_function_wrapper(rf_model_function_wrapper)
+
         if verbose_flag:
             print(f'\n{_PREFIX} ═══════════════════════════════════════')
             print(f'{_PREFIX} RF INVERSION PREPARED')
@@ -2007,6 +2598,9 @@ class RFInversion:
             print(f'{_PREFIX}   seed          : 42 (internal fixed noise seed)')
             print(f'{_PREFIX}   schedule      : captured from sampler at runtime; no SIGMAS input')
             print(f'{_PREFIX}   output        : normal LATENT with RF metadata')
+            print(f'{_PREFIX}   wrapper       : standalone RF cache builder installed on MODEL')
+            print(f'{_PREFIX}   diagnostics   : verbose=True prints per-call/cache/conditioning details')
+            _rf_print_model_identity(f'{_PREFIX}   RFInversion', model_info)
             print(f'{_PREFIX} ═══════════════════════════════════════\n')
 
         return (model_clone, rf_latent)
@@ -2017,7 +2611,7 @@ class UntwistingRoPE:
     RETURN_NAMES = ('model',)
     FUNCTION = 'patch'
     DESCRIPTION = (
-        'Patches Z-Image attention/RoPE and uses the RFInversion LATENT trajectory. '
+        'Patches supported attention/RoPE modules and uses the RFInversion LATENT trajectory. '
         'RF inversion settings live on the LATENT; the sampler sigma schedule is captured internally.'
     )
 
@@ -2101,12 +2695,25 @@ class UntwistingRoPE:
         if rf_active:
             setattr(model_clone, '_untwisting_rope_rf_state', rf_state)
             setattr(model_clone, '_untwisting_rope_rf_config', rf_cfg)
-        dm = _safe_get_diffusion_model(model_clone)
+
+        model_info = _rf_model_identity(model_clone)
+        adapter = _select_model_adapter(model_clone, model_info)
+        dm = _safe_get_diffusion_model(model_clone, adapter)
         _vprint(stats, f'{_PREFIX} Diffusion model type: {type(dm).__name__}')
 
-        _patch_context_refiner_mask_modules(dm, stats)
-        _patch_patchify_and_embed(dm, stats)
-        _patch_joint_attention_modules(dm, stats)
+        global _ACTIVE_MODEL_ADAPTER
+        previous_adapter = _ACTIVE_MODEL_ADAPTER
+        _ACTIVE_MODEL_ADAPTER = adapter
+        try:
+            patch_fn = getattr(adapter, 'patch_attention_modules', None)
+            if callable(patch_fn):
+                patch_fn(dm, stats, _adapter_helpers())
+            else:
+                _patch_context_refiner_mask_modules(dm, stats)
+                _patch_patchify_and_embed(dm, stats)
+                _patch_joint_attention_modules(dm, stats)
+        finally:
+            _ACTIVE_MODEL_ADAPTER = previous_adapter
 
         old_wrapper = model_clone.model_options.get('model_function_wrapper', None)
 
@@ -2138,7 +2745,9 @@ class UntwistingRoPE:
                 'cross_batch_target_batch': target_b if rf_active else 0,
                 'progress': progress,
             }
-            to['untwisting_rope_zimage'] = cfg
+            default_cfg = getattr(adapter, 'default_runtime_cfg', lambda _dm=None: {})
+            cfg.update(default_cfg(dm))
+            to[_TRANSFORMER_CONFIG_KEY] = cfg
 
             input_for_model = input_x
             timestep_for_model = timestep
@@ -2155,7 +2764,13 @@ class UntwistingRoPE:
                     ref = _repeat_to_batch(ref_clean, target_b)
 
                     if not rf_state.get('schedule_built', False) and rf_state.get('sampler_sigmas', None) is not None:
-                        rf_kwargs, rf_cond_mode = _build_rf_conditioning_kwargs(c, ref_conditioning, target_b)
+                        effective_ref_conditioning, adapter_ref_status = _prepare_reference_conditioning_for_adapter(
+                            adapter, ref_conditioning, dm, input_x.device,
+                            c.get('c_crossattn').dtype if torch.is_tensor(c.get('c_crossattn', None)) else input_x.dtype,
+                            stats, label='UntwistingRoPE',
+                        )
+                        rf_kwargs, rf_cond_mode = _build_rf_conditioning_kwargs(c, effective_ref_conditioning, target_b)
+                        rf_cond_mode = _append_conditioning_status(rf_cond_mode, adapter_ref_status)
                         rf_ref_clean = _repeat_to_batch(ref_clean, target_b)
                         sampler_sigmas = list(rf_state['sampler_sigmas'])
                         cache_key = _make_rf_persistent_key(
@@ -2231,17 +2846,17 @@ class UntwistingRoPE:
                         debug_store['persistent_cache_key'] = cache_key
                         debug_store['persistent_cache_hit'] = bool(rf_state.get('persistent_cache_hit', False))
                         debug_store['parameterization'] = stats.parameterization
-                        _rf_vprint(stats,
-                            f'{_PREFIX} RFInversion debug store updated: '
-                            f'cache={len(debug_store["cache"])}  '
-                            f'built_sigmas={len(debug_store["built_sigmas"] or [])}  '
-                            f'parameterization={stats.parameterization}'
-                        )
                     elif rf_state.get('schedule_built', False):
                         ref_mode = 'RF sampler-sigma trajectory (cached)'
                     else:
                         # Fallback: no sampler wrapper triggered. This preserves original behavior.
-                        rf_kwargs, rf_cond_mode = _build_rf_conditioning_kwargs(c, ref_conditioning, target_b)
+                        effective_ref_conditioning, adapter_ref_status = _prepare_reference_conditioning_for_adapter(
+                            adapter, ref_conditioning, dm, input_x.device,
+                            c.get('c_crossattn').dtype if torch.is_tensor(c.get('c_crossattn', None)) else input_x.dtype,
+                            stats, label='UntwistingRoPEFallback',
+                        )
+                        rf_kwargs, rf_cond_mode = _build_rf_conditioning_kwargs(c, effective_ref_conditioning, target_b)
+                        rf_cond_mode = _append_conditioning_status(rf_cond_mode, adapter_ref_status)
                         rf_ref_clean = _repeat_to_batch(ref_clean, target_b)
                         preview_callback = rf_state.get('preview_callback', None)
                         if preview_callback is None:
@@ -2288,13 +2903,8 @@ class UntwistingRoPE:
 
                     if should_print:
                         print(
-                            f'{_PREFIX} [WRAPPER call={call_n}  σ={sigma:.4f}  progress={progress:.3f}  '
-                            f'parameterization={stats.parameterization}]\n'
                             f'{_PREFIX}   input_x   mean={input_x.mean().item():.4f}  std={input_x.std().item():.4f}\n'
-                            f'{_PREFIX}   ref_noisy mean={ref_noisy.mean().item():.4f}  std={ref_noisy.std().item():.4f}  [{ref_mode}]\n'
-                            f'{_PREFIX}   |Δ|(input_x - ref_noisy) = {(input_x - ref_noisy).abs().mean().item():.4f}\n'
-                            f'{_PREFIX}   RF cache_hit={rf_cache_hit}  cond={rf_cond_mode}  '
-                            f'schedule_sigmas={len(rf_state.get("sampler_sigmas") or [])}'
+                            f'{_PREFIX}   ref_noisy mean={ref_noisy.mean().item():.4f}  std={ref_noisy.std().item():.4f}  [{ref_mode}]'
                         )
 
                     if ref_noisy.shape[-2:] == input_x.shape[-2:]:
@@ -2309,7 +2919,13 @@ class UntwistingRoPE:
                         except Exception:
                             timestep_for_model = timestep
 
-                        c, forced_cap_mask = _merge_reference_conditioning_into_c(c, ref_conditioning, target_b)
+                        effective_ref_conditioning, adapter_ref_status = _prepare_reference_conditioning_for_adapter(
+                            adapter, ref_conditioning, dm, input_x.device,
+                            c.get('c_crossattn').dtype if torch.is_tensor(c.get('c_crossattn', None)) else input_x.dtype,
+                            stats, label='UntwistingRoPEMerge',
+                        )
+                        c, forced_cap_mask = _merge_reference_conditioning_into_c(c, effective_ref_conditioning, target_b)
+                        cfg['adapter_ref_conditioning_status'] = adapter_ref_status
                         cfg['forced_cap_mask'] = forced_cap_mask.to(device=input_x.device)
                         cfg['cross_batch_target_batch'] = target_b
 
@@ -2362,10 +2978,7 @@ class UntwistingRoPE:
                     print(f'{_PREFIX} ⚠ Failed to cache RF debug latents at σ={float(sigma):.6f}: {exc}')
 
                 if should_print:
-                    print(
-                        f'{_PREFIX}   target_pred mean={target_pred.mean().item():.4f}  std={target_pred.std().item():.4f}\n'
-                        f'{_PREFIX}   ref_pred    mean={ref_pred.mean().item():.4f}  std={ref_pred.std().item():.4f}'
-                    )
+                    pass
                 return target_pred
 
             return raw_result
@@ -2379,7 +2992,9 @@ class UntwistingRoPE:
             _vprint(stats, f'{_PREFIX}   RF input      : LATENT from RFInversion')
             _vprint(stats, f'{_PREFIX}   RF schedule   : captured internally by RFInversion model wrapper')
             _vprint(stats, f'{_PREFIX}   RF preview    : emitted while building inversion trajectory')
-            _vprint(stats, f'{_PREFIX}   K/V           : reference branch contributes K and V; only K is untwisted')
+            uses_kv = getattr(adapter, 'uses_reference_branch_kv', lambda: False)
+            if bool(uses_kv()):
+                _vprint(stats, f'{_PREFIX}   K/V           : reference branch contributes K and V; only K is untwisted')
         else:
             _vprint(stats, f'{_PREFIX}   RF input      : not connected')
             _vprint(stats, f'{_PREFIX}   Mode          : target-only attention patch')
