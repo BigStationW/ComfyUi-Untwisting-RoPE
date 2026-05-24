@@ -17,6 +17,17 @@ from comfy.ldm.flux.math import apply_rope
 from comfy.ldm.modules.attention import optimized_attention_masked
 
 _PREFIX = '[UntwistingRoPE]'
+_RF_PREFIX = '[RFInversion]'
+
+def _rf_prefix(stats: Optional[Any] = None) -> str:
+    try:
+        prefix = getattr(stats, 'rf_prefix', None)
+        if isinstance(prefix, str) and prefix:
+            return prefix
+    except Exception:
+        pass
+    return _RF_PREFIX
+
 _TRANSFORMER_CONFIG_KEY = model_adapters.CONFIG_KEY
 
 # Module-level fallback store. Comfy/KSampler may clone or pass model objects
@@ -144,6 +155,7 @@ class _RuntimeStats:
         # rf_verbose controls RFInversion trajectory/wrapper logs.
         self.verbose: bool = _coerce_bool(verbose)
         self.rf_verbose: bool = _coerce_bool(rf_verbose)
+        self.rf_prefix: str = _RF_PREFIX
         self.wrapper_calls:  int = 0
         self.patchify_calls: int = 0
         self.attn_calls:     int = 0
@@ -452,16 +464,16 @@ def _rf_stability_summary(
 
 def _rf_print_stability_summary(summary: Dict[str, Any]) -> None:
     level = summary.get('level', 'WARN')
-    print(f'{_PREFIX}   RF numerical sanity: {level}')
+    print(f'{_RF_PREFIX}   RF numerical sanity: {level}')
     print(
-        f'{_PREFIX}     cache_items={summary.get("cache_items")}  '
+        f'{_RF_PREFIX}     cache_items={summary.get("cache_items")}  '
         f'sigmas={summary.get("sigmas")}  '
         f'first_sigma={_rf_scalar_fmt(summary.get("first_sigma"))}  '
         f'last_sigma={_rf_scalar_fmt(summary.get("last_sigma"))}  '
         f'finite_all={summary.get("finite_all")}'
     )
     print(
-        f'{_PREFIX}     std: ref={_rf_scalar_fmt(summary.get("ref_std"))}  '
+        f'{_RF_PREFIX}     std: ref={_rf_scalar_fmt(summary.get("ref_std"))}  '
         f'first={_rf_scalar_fmt(summary.get("first_std"))}  '
         f'final={_rf_scalar_fmt(summary.get("final_std"))}  '
         f'eps={_rf_scalar_fmt(summary.get("eps_std"))}  '
@@ -469,14 +481,14 @@ def _rf_print_stability_summary(summary: Dict[str, Any]) -> None:
         f'range=[{_rf_scalar_fmt(summary.get("std_min"))}, {_rf_scalar_fmt(summary.get("std_max"))}]'
     )
     print(
-        f'{_PREFIX}     final: mean={_rf_scalar_fmt(summary.get("final_mean"))}  '
+        f'{_RF_PREFIX}     final: mean={_rf_scalar_fmt(summary.get("final_mean"))}  '
         f'min={_rf_scalar_fmt(summary.get("final_min"))}  '
         f'max={_rf_scalar_fmt(summary.get("final_max"))}  '
         f'max_abs={_rf_scalar_fmt(summary.get("final_max_abs"))}  '
         f'max_abs_over_path={_rf_scalar_fmt(summary.get("max_abs_max"))}'
     )
     print(
-        f'{_PREFIX}     deltas: mean|Δz|={_rf_scalar_fmt(summary.get("dz_mean"))}  '
+        f'{_RF_PREFIX}     deltas: mean|Δz|={_rf_scalar_fmt(summary.get("dz_mean"))}  '
         f'max|Δz|={_rf_scalar_fmt(summary.get("dz_max"))}  '
         f'first_vs_ref_mae={_rf_scalar_fmt(summary.get("first_vs_ref_mae"))}  '
         f'final_vs_eps_mae={_rf_scalar_fmt(summary.get("final_vs_eps_mae"))}  '
@@ -485,15 +497,15 @@ def _rf_print_stability_summary(summary: Dict[str, Any]) -> None:
     )
     warnings = summary.get('warnings') or []
     if warnings:
-        print(f'{_PREFIX}     warnings={warnings} bad_sigma_keys={summary.get("bad_sigma_keys", [])}')
+        print(f'{_RF_PREFIX}     warnings={warnings} bad_sigma_keys={summary.get("bad_sigma_keys", [])}')
     if level != 'PASS':
         print(
-            f'{_PREFIX}   ⚠ RF numerical sanity did not PASS. This is a diagnostic flag only; '
+            f'{_RF_PREFIX}   ⚠ RF numerical sanity did not PASS. This is a diagnostic flag only; '
             f'it means inspect the printed stats and the generated image before trusting the run.'
         )
     else:
         print(
-            f'{_PREFIX}   RF numerical sanity PASS only means no obvious numeric collapse/divergence; '
+            f'{_RF_PREFIX}   RF numerical sanity PASS only means no obvious numeric collapse/divergence; '
             f'it does not prove visual/semantic quality.'
         )
 
@@ -765,7 +777,7 @@ def _rf_build_cache_from_sampler_sigmas(
     mode, gamma_curve = _normalize_rf_mode_and_gamma_curve(rf_mode, gamma_curve)
     valid_modes = {'linear', 'rf_gamma', 'rf_gamma_rk2', 'fireflow'}
     if mode not in valid_modes:
-        print(f'{_PREFIX}   ⚠ Unknown rf_mode={mode!r}; falling back to rf_gamma')
+        print(f'{_rf_prefix(stats)}   ⚠ Unknown rf_mode={mode!r}; falling back to rf_gamma')
         mode = 'rf_gamma'
 
     parameterization = getattr(stats, 'parameterization', 'unknown') if stats else 'unknown'
@@ -816,12 +828,12 @@ def _rf_build_cache_from_sampler_sigmas(
         _rf_emit_preview(preview_callback, step_index, raw_pred, x_current, total_preview_steps)
 
     _rf_vprint(stats,
-        f'{_PREFIX}   RF trajectory mode: {mode}  gamma={gamma:.4f}  '
+        f'{_rf_prefix(stats)}   RF trajectory mode: {mode}  gamma={gamma:.4f}  '
         f'gamma_curve={gamma_curve:.3f}  '
         f'norm_strength={norm_strength:.3f}  '
         f'norm={"on" if norm_strength > 0.0 else "off"}  '
         f'parameterization={parameterization}\n'
-        f'{_PREFIX}   pmi_alpha={pmi_alpha_eff:.3f}  '
+        f'{_rf_prefix(stats)}   pmi_alpha={pmi_alpha_eff:.3f}  '
         f'PMI={"on" if use_pmi else "off"}'
     )
 
@@ -855,7 +867,7 @@ def _rf_build_cache_from_sampler_sigmas(
                     return v, True, raw
                 except Exception as exc:
                     failures += 1
-                    print(f'{_PREFIX}   [WARNING {mode}{label}] model failed at σ={sigma_val:.6f}: {exc}')
+                    print(f'{_rf_prefix(stats)}   [WARNING {mode}{label}] model failed at σ={sigma_val:.6f}: {exc}')
                     return torch.zeros_like(z_in), False, None
     
         def _apply_pmi_if_enabled(v: torch.Tensor) -> torch.Tensor:
@@ -945,11 +957,11 @@ def _rf_build_cache_from_sampler_sigmas(
         cache[round(sigma_cur, 6)] = z.detach().clone()
     
         _rf_vprint(stats,
-            f'{_PREFIX}     z_sigma step {step_i:02d}/{len(sigmas)-1}: '
+            f'{_rf_prefix(stats)}     z_sigma step {step_i:02d}/{len(sigmas)-1}: '
             f'mode={mode}  γ_eff={gamma_eff:.4f}  '
             f'σ_prev={sigma_prev:.6f} -> σ={sigma_cur:.6f}  Δσ={delta:.6f}  '
             f'|model|={vm_abs:.5f}  |prior|={vp_abs:.5f}  |Δz|={dz_abs:.5f}  {extra}\n'
-            f'{_PREFIX}       z_σ mean={z_mean:.4f}  std={z_std:.4f}  '
+            f'{_rf_prefix(stats)}       z_σ mean={z_mean:.4f}  std={z_std:.4f}  '
             f'min={z_min:.4f}  max={z_max:.4f}'
         )
 
@@ -962,15 +974,15 @@ def _rf_build_cache_from_sampler_sigmas(
     
     steps = max(1, len(sigmas) - 1)
     _rf_vprint(stats,
-        f'{_PREFIX}   RF schedule build: mode={mode}  sampler_sigmas={len(sampler_sigmas)}  '
+        f'{_rf_prefix(stats)}   RF schedule build: mode={mode}  sampler_sigmas={len(sampler_sigmas)}  '
         f'unique={len(sigmas)}  rf_steps={len(sigmas)-1}  '
         f'model_ok={model_ok}  failures={failures}\n'
-        f'{_PREFIX}     sigma_range=[{sigmas[0]:.6f}, {sigmas[-1]:.6f}]  '
+        f'{_rf_prefix(stats)}     sigma_range=[{sigmas[0]:.6f}, {sigmas[-1]:.6f}]  '
         f'|model|={vm_sum/max(1, model_ok):.5f}  |prior|={vp_sum/steps:.5f}  '
         f'z_final std={z.std().item():.4f}  parameterization={parameterization}'
     )
     if failures > 0:
-        print(f'{_PREFIX}   ⚠ RF schedule warning: {failures} model call(s) failed.')
+        print(f'{_rf_prefix(stats)}   ⚠ RF schedule warning: {failures} model call(s) failed.')
 
     return cache, eps, sigmas
 
@@ -1014,7 +1026,7 @@ def _rf_increment_reference_one_step(
             v_model_abs = float(v_model.abs().mean().item())
             model_ok = True
         except Exception as exc:
-            print(f'{_PREFIX}   [WARNING direct RF] model call failed at σ=0.000000: {exc}')
+            print(f'{_rf_prefix(stats)}   [WARNING direct RF] model call failed at σ=0.000000: {exc}')
             v_model = torch.zeros_like(z_prev)
             v_model_abs = 0.0
             model_ok = False
@@ -1032,11 +1044,11 @@ def _rf_increment_reference_one_step(
     _rf_emit_preview(preview_callback, 0, raw, z_cur, 1)
 
     _rf_vprint(stats,
-        f'{_PREFIX}   RF direct σ_base=0.000000 -> σ={sigma_cur:.6f}  '
+        f'{_rf_prefix(stats)}   RF direct σ_base=0.000000 -> σ={sigma_cur:.6f}  '
         f'Δσ={delta_sigma:.6f}  gamma_eff={gamma_eff:.4f}  '
         f'norm_strength={norm_strength:.3f}  '
         f'model_ok={model_ok}  parameterization={parameterization}\n'
-        f'{_PREFIX}     |v_model|={v_model_abs:.5f}  |v_prior|={v_prior_abs:.5f}  '
+        f'{_rf_prefix(stats)}     |v_model|={v_model_abs:.5f}  |v_prior|={v_prior_abs:.5f}  '
         f'z_cur std={z_cur.std().item():.4f}'
     )
     return z_cur, eps
@@ -1200,7 +1212,7 @@ def _build_rf_conditioning_kwargs(
             ref_only = _slice_conditioning_batch(merged, target_b, target_b * 2)
             return _clone_conditioning_for_rf(ref_only), 'reference'
     except Exception as exc:
-        print(f'{_PREFIX}   ⚠ RF conditioning fallback: {exc}')
+        print(f'{_RF_PREFIX}   ⚠ RF conditioning fallback: {exc}')
     return _clone_conditioning_for_rf(c), 'target-fallback'
 
 def _sigma_from_timestep(timestep: torch.Tensor) -> float:
@@ -2137,14 +2149,14 @@ def _rf_make_preview_callback(model_for_preview: Any, total_steps: int) -> Optio
         try:
             return latent_preview.prepare_callback(model_for_preview, total_steps)
         except Exception as exc:
-            print(f'{_PREFIX} ⚠ RF preview callback disabled: {exc}')
+            print(f'{_RF_PREFIX} ⚠ RF preview callback disabled: {exc}')
     try:
         pbar = comfy.utils.ProgressBar(total_steps)
         def _progress_only(step: int, x0: torch.Tensor, x: torch.Tensor, steps: int) -> None:
             pbar.update_absolute(step + 1, steps)
         return _progress_only
     except Exception as exc:
-        print(f'{_PREFIX} ⚠ RF progress callback disabled: {exc}')
+        print(f'{_RF_PREFIX} ⚠ RF progress callback disabled: {exc}')
         return None
 
 def _rf_emit_preview(
@@ -2162,7 +2174,7 @@ def _rf_emit_preview(
         current = x_current[:1].detach() if torch.is_tensor(x_current) else preview_latent
         callback(int(step), preview_latent, current, int(total_steps))
     except Exception as exc:
-        print(f'{_PREFIX} ⚠ RF preview frame failed at step {int(step) + 1}: {exc}')
+        print(f'{_RF_PREFIX} ⚠ RF preview frame failed at step {int(step) + 1}: {exc}')
 
 def _rf_latent_get_config(rf_inversion: Optional[Dict[str, Any]]) -> Tuple[bool, Dict[str, Any], Dict[str, Any], Optional[torch.Tensor], Optional[Any], str]:
     """Read RFInversion's LATENT metadata without exposing a custom Comfy type."""
@@ -2281,7 +2293,7 @@ class RFInversion:
             dm_for_ref = _safe_get_diffusion_model(model, adapter)
         except Exception as exc:
             if verbose_flag:
-                print(f'{_PREFIX} ⚠ Could not access diffusion model for reference conditioning preprocessing: {exc}')
+                print(f'{_RF_PREFIX} ⚠ Could not access diffusion model for reference conditioning preprocessing: {exc}')
 
         cfg: Dict[str, Any] = {
             'rf_mode': str(rf_mode),
@@ -2368,7 +2380,7 @@ class RFInversion:
                 debug_store['parameterization'] = rf_latent.get('untwist_rf_parameterization', 'unknown')
                 if verbose_flag:
                     print(
-                        f'{_PREFIX} RFInversion sampler_sample: captured {len(found)} sigmas  '
+                        f'{_RF_PREFIX} RFInversion sampler_sample: captured {len(found)} sigmas  '
                         f'run={state["run_count"]}  seed=42'
                     )
             return executor(model_wrap, sigmas, extra_args, callback, noise, latent_image, denoise_mask, disable_pbar)
@@ -2388,6 +2400,7 @@ class RFInversion:
         # returns the original model prediction unchanged.
         old_model_function_wrapper = model_clone.model_options.get('model_function_wrapper', None)
         rf_runtime_stats = _RuntimeStats(verbose=False, rf_verbose=verbose_flag)
+        rf_runtime_stats.rf_prefix = _RF_PREFIX
         rf_runtime_stats.parameterization = detected_param
 
         def rf_model_function_wrapper(apply_model: Callable, args: Dict[str, Any]) -> torch.Tensor:
@@ -2438,11 +2451,11 @@ class RFInversion:
                     )
 
                     if verbose_flag:
-                        print(f'{_PREFIX}   RF build requested from RFInversion wrapper')
-                        print(f'{_PREFIX}   {_rf_sequence_summary("sampler_sigmas", sampler_sigmas)}')
-                        print(f'{_PREFIX}   target_b={target_b} cond_mode={rf_cond_mode} cache_key={cache_key[:12]}')
-                        print(f'{_PREFIX}   rf_ref_clean: {_rf_tensor_summary("rf_ref_clean", rf_ref_clean)}')
-                        print(f'{_PREFIX}   rf_kwargs summary: {_rf_brief_obj(rf_kwargs)}')
+                        print(f'{_RF_PREFIX}   RF build requested from RFInversion wrapper')
+                        print(f'{_RF_PREFIX}   {_rf_sequence_summary("sampler_sigmas", sampler_sigmas)}')
+                        print(f'{_RF_PREFIX}   target_b={target_b} cond_mode={rf_cond_mode} cache_key={cache_key[:12]}')
+                        print(f'{_RF_PREFIX}   rf_ref_clean: {_rf_tensor_summary("rf_ref_clean", rf_ref_clean)}')
+                        print(f'{_RF_PREFIX}   rf_kwargs summary: {_rf_brief_obj(rf_kwargs)}')
 
                     cached_entry = _RF_PERSISTENT_TRAJECTORY_CACHE.get(cache_key)
                     if cached_entry is not None:
@@ -2451,7 +2464,7 @@ class RFInversion:
                         sorted_sigmas = list(cached_entry['built_sigmas'])
                         state['persistent_cache_hit'] = True
                         if verbose_flag:
-                            print(f'{_PREFIX}   RF persistent cache HIT key={cache_key[:12]} cache_items={len(built_cache)}')
+                            print(f'{_RF_PREFIX}   RF persistent cache HIT key={cache_key[:12]} cache_items={len(built_cache)}')
                     else:
                         state['persistent_cache_hit'] = False
                         preview_callback = state.get('preview_callback', None)
@@ -2459,7 +2472,7 @@ class RFInversion:
                             preview_callback = _rf_make_preview_callback(model_clone, max(1, len(list(sampler_sigmas)) - 1))
                             state['preview_callback'] = preview_callback
                         if verbose_flag:
-                            print(f'{_PREFIX}   RF persistent cache MISS key={cache_key[:12]} → building now')
+                            print(f'{_RF_PREFIX}   RF persistent cache MISS key={cache_key[:12]} → building now')
                         built_cache, eps, sorted_sigmas = _rf_build_cache_from_sampler_sigmas(
                             ref_clean=rf_ref_clean,
                             sampler_sigmas=list(sampler_sigmas),
@@ -2508,7 +2521,7 @@ class RFInversion:
 
                     if verbose_flag:
                         print(
-                            f'{_PREFIX}   RF build complete: cache_items={len(built_cache)} '
+                            f'{_RF_PREFIX}   RF build complete: cache_items={len(built_cache)} '
                             f'built_sigmas={len(sorted_sigmas)} eps={_rf_tensor_summary("eps", eps)}'
                         )
                         _rf_print_stability_summary(rf_sanity)
@@ -2526,7 +2539,7 @@ class RFInversion:
                     state['last_cond_mode'] = rf_cond_mode
                     debug_store['last_cond_mode'] = rf_cond_mode
                     if verbose_flag:
-                        print(f'{_PREFIX}   ⚠ No sampler sigmas captured yet; direct one-step RF fallback for σ={sigma:.6f}')
+                        print(f'{_RF_PREFIX}   ⚠ No sampler sigmas captured yet; direct one-step RF fallback for σ={sigma:.6f}')
                     z_sigma, eps = _rf_increment_reference_one_step(
                         z_prev=rf_ref_clean,
                         sigma_prev=0.0,
@@ -2576,7 +2589,7 @@ class RFInversion:
             except Exception as exc:
                 state['last_error'] = repr(exc)
                 debug_store['last_error'] = repr(exc)
-                print(f'{_PREFIX} ⚠ RFInversion standalone wrapper failed; sampling will continue unchanged: {exc}')
+                print(f'{_RF_PREFIX} ⚠ RFInversion standalone wrapper failed; sampling will continue unchanged: {exc}')
                 if verbose_flag:
                     print(traceback.format_exc())
 
@@ -2587,21 +2600,21 @@ class RFInversion:
         model_clone.set_model_unet_function_wrapper(rf_model_function_wrapper)
 
         if verbose_flag:
-            print(f'\n{_PREFIX} ═══════════════════════════════════════')
-            print(f'{_PREFIX} RF INVERSION PREPARED')
-            print(f'{_PREFIX} ═══════════════════════════════════════')
-            print(f'{_PREFIX}   mode          : {rf_mode}')
-            print(f'{_PREFIX}   gamma         : {float(gamma):.4f}')
-            print(f'{_PREFIX}   gamma_curve   : {float(gamma_curve):.3f}')
-            print(f'{_PREFIX}   norm_strength : {float(norm_strength):.3f}')
-            print(f'{_PREFIX}   pmi_alpha     : {float(pmi_alpha):.3f}')
-            print(f'{_PREFIX}   seed          : 42 (internal fixed noise seed)')
-            print(f'{_PREFIX}   schedule      : captured from sampler at runtime; no SIGMAS input')
-            print(f'{_PREFIX}   output        : normal LATENT with RF metadata')
-            print(f'{_PREFIX}   wrapper       : standalone RF cache builder installed on MODEL')
-            print(f'{_PREFIX}   diagnostics   : verbose=True prints per-call/cache/conditioning details')
-            _rf_print_model_identity(f'{_PREFIX}   RFInversion', model_info)
-            print(f'{_PREFIX} ═══════════════════════════════════════\n')
+            print(f'\n{_RF_PREFIX} ═══════════════════════════════════════')
+            print(f'{_RF_PREFIX} RF INVERSION PREPARED')
+            print(f'{_RF_PREFIX} ═══════════════════════════════════════')
+            print(f'{_RF_PREFIX}   mode          : {rf_mode}')
+            print(f'{_RF_PREFIX}   gamma         : {float(gamma):.4f}')
+            print(f'{_RF_PREFIX}   gamma_curve   : {float(gamma_curve):.3f}')
+            print(f'{_RF_PREFIX}   norm_strength : {float(norm_strength):.3f}')
+            print(f'{_RF_PREFIX}   pmi_alpha     : {float(pmi_alpha):.3f}')
+            print(f'{_RF_PREFIX}   seed          : 42 (internal fixed noise seed)')
+            print(f'{_RF_PREFIX}   schedule      : captured from sampler at runtime; no SIGMAS input')
+            print(f'{_RF_PREFIX}   output        : normal LATENT with RF metadata')
+            print(f'{_RF_PREFIX}   wrapper       : standalone RF cache builder installed on MODEL')
+            print(f'{_RF_PREFIX}   diagnostics   : verbose=True prints per-call/cache/conditioning details')
+            _rf_print_model_identity(f'{_RF_PREFIX}   RFInversion', model_info)
+            print(f'{_RF_PREFIX} ═══════════════════════════════════════\n')
 
         return (model_clone, rf_latent)
 
@@ -2653,6 +2666,7 @@ class UntwistingRoPE:
         node_verbose = _coerce_bool(verbose)
         rf_verbose = _coerce_bool(rf_cfg.get('verbose', False))
         stats = _RuntimeStats(verbose=node_verbose, rf_verbose=rf_verbose)
+        stats.rf_prefix = _RF_PREFIX
         debug_store = _rf_new_debug_store()
 
         rf_mode = str(rf_cfg.get('rf_mode', 'fireflow'))
@@ -2756,7 +2770,9 @@ class UntwistingRoPE:
             rf_cache_hit = False
             rf_cond_mode = 'not-connected'
             ref_mode = 'target-only'
-            should_print = _coerce_bool(getattr(stats, 'rf_verbose', False))
+            # These input/ref-noisy lines belong to the UntwistingRoPE node,
+            # so they must follow the UntwistingRoPE verbose toggle, not RFInversion's.
+            should_print = _coerce_bool(getattr(stats, 'verbose', False))
 
             if rf_active and torch.is_tensor(ref_clean_cpu):
                 try:
@@ -2790,11 +2806,11 @@ class UntwistingRoPE:
                             built_cache = _cache_to_device(cached_entry['cache'], input_x.device, input_x.dtype)
                             eps = cached_entry['eps'].to(device=input_x.device, dtype=input_x.dtype)
                             sorted_sigmas = list(cached_entry['built_sigmas'])
-                            _rf_vprint(stats, f'{_PREFIX} RFInversion persistent cache HIT: key={cache_key[:12]}  cache={len(built_cache)}')
+                            _rf_vprint(stats, f'{_rf_prefix(stats)} RFInversion persistent cache HIT: key={cache_key[:12]}  cache={len(built_cache)}')
                             ref_mode = 'RF sampler-sigma trajectory (persistent-cache hit)'
                             rf_state['persistent_cache_hit'] = True
                         else:
-                            _rf_vprint(stats, f'{_PREFIX} RFInversion persistent cache MISS: key={cache_key[:12]}  building trajectory')
+                            _rf_vprint(stats, f'{_rf_prefix(stats)} RFInversion persistent cache MISS: key={cache_key[:12]}  building trajectory')
                             preview_callback = rf_state.get('preview_callback', None)
                             if preview_callback is None:
                                 preview_callback = _rf_make_preview_callback(model_clone, max(1, len(sampler_sigmas) - 1))
@@ -2904,7 +2920,7 @@ class UntwistingRoPE:
                     if should_print:
                         print(
                             f'{_PREFIX}   input_x   mean={input_x.mean().item():.4f}  std={input_x.std().item():.4f}\n'
-                            f'{_PREFIX}   ref_noisy mean={ref_noisy.mean().item():.4f}  std={ref_noisy.std().item():.4f}  [{ref_mode}]'
+                            f'{_PREFIX}   ref_noisy mean={ref_noisy.mean().item():.4f}  std={ref_noisy.std().item():.4f}'
                         )
 
                     if ref_noisy.shape[-2:] == input_x.shape[-2:]:
