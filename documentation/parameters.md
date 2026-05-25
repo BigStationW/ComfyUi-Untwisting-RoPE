@@ -26,6 +26,5 @@ Untwisting RoPE patches the model's attention layers to let the target image att
 | `beta` | `50.00` | Controls the steepness of the frequency scale curve. Higher values prevent the model from copying the reference image too closely. |
 | `high_scale` | `1.05`  | Scale applied to high-frequency components. The higher the value, the more the final image will resemble the structure of the reference image.|
 | `low_scale` | `3.0` | Scale applied to low-frequency components. Controls the strength of the style image. |
-| `start_block` | `0` | First transformer block index to apply the reference attention patch. |
-| `end_block` | `999` | Last transformer block index to apply the reference attention patch. |
+| `blocks` | `0-999` | Block indices to which the reference attention patch is applied. |
 | `adain_strength` | `0.50` | [AdaIN (Arbitrary Style Transfer in Real-time with Adaptive Instance Normalization)](https://arxiv.org/abs/1703.06868) aligns the target style statistics toward the reference. |
