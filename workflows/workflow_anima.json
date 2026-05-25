@@ -1,8 +1,8 @@
 {
   "id": "44259803-f9d6-4eb1-a94a-75b8213649d0",
   "revision": 0,
-  "last_node_id": 633,
-  "last_link_id": 1560,
+  "last_node_id": 635,
+  "last_link_id": 1561,
   "nodes": [
     {
       "id": 333,
@@ -16,7 +16,7 @@
         46
       ],
       "flags": {},
-      "order": 15,
+      "order": 17,
       "mode": 0,
       "inputs": [
         {
@@ -104,7 +104,7 @@
         456.72464032296625
       ],
       "flags": {},
-      "order": 21,
+      "order": 23,
       "mode": 0,
       "inputs": [
         {
@@ -166,7 +166,7 @@
         515.9512940840721
       ],
       "flags": {},
-      "order": 23,
+      "order": 25,
       "mode": 0,
       "inputs": [
         {
@@ -195,7 +195,7 @@
         62.2083101328426
       ],
       "flags": {},
-      "order": 22,
+      "order": 24,
       "mode": 0,
       "inputs": [
         {
@@ -260,7 +260,7 @@
         220.0000000000001
       ],
       "flags": {},
-      "order": 14,
+      "order": 16,
       "mode": 0,
       "inputs": [
         {
@@ -316,7 +316,7 @@
         240.5904011287812
       ],
       "flags": {},
-      "order": 17,
+      "order": 19,
       "mode": 0,
       "inputs": [
         {
@@ -510,7 +510,7 @@
         200
       ],
       "flags": {},
-      "order": 13,
+      "order": 15,
       "mode": 0,
       "inputs": [
         {
@@ -549,7 +549,7 @@
         200
       ],
       "flags": {},
-      "order": 12,
+      "order": 14,
       "mode": 0,
       "inputs": [
         {
@@ -623,7 +623,7 @@
         168
       ],
       "flags": {},
-      "order": 16,
+      "order": 18,
       "mode": 0,
       "inputs": [
         {
@@ -755,7 +755,7 @@
         98
       ],
       "flags": {},
-      "order": 19,
+      "order": 21,
       "mode": 0,
       "inputs": [
         {
@@ -827,7 +827,7 @@
         270
       ],
       "flags": {},
-      "order": 18,
+      "order": 20,
       "mode": 0,
       "inputs": [
         {
@@ -840,6 +840,12 @@
           "shape": 7,
           "type": "LATENT",
           "link": 1555
+        },
+        {
+          "name": "unofficial_extensions",
+          "shape": 7,
+          "type": "UNTWISTING_ROPE_EXTENSIONS",
+          "link": 1561
         }
       ],
       "outputs": [
@@ -865,32 +871,8 @@
         1.5,
         0.5,
         "0-999",
-        true,
-        false
+        true
       ]
-    },
-    {
-      "id": 611,
-      "type": "Note",
-      "pos": [
-        1135.9170901232549,
-        950.1203098736455
-      ],
-      "size": [
-        285.24835336919455,
-        126.58960944919556
-      ],
-      "flags": {},
-      "order": 10,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [],
-      "properties": {},
-      "widgets_values": [
-        "The only relevant values to change are :\n\n- high_scale: \n- low_scale_end: (between 1.0 and 1.5)"
-      ],
-      "color": "#c09430",
-      "bgcolor": "rgba(24,24,27,.9)"
     },
     {
       "id": 31,
@@ -904,7 +886,7 @@
         106
       ],
       "flags": {},
-      "order": 20,
+      "order": 22,
       "mode": 0,
       "inputs": [
         {
@@ -945,7 +927,7 @@
         270
       ],
       "flags": {},
-      "order": 11,
+      "order": 10,
       "mode": 0,
       "inputs": [
         {
@@ -957,6 +939,12 @@
           "name": "rf_inversion",
           "shape": 7,
           "type": "LATENT",
+          "link": null
+        },
+        {
+          "name": "unofficial_extensions",
+          "shape": 7,
+          "type": "UNTWISTING_ROPE_EXTENSIONS",
           "link": null
         }
       ],
@@ -981,8 +969,87 @@
         1.5,
         0.5,
         "0-999",
-        true,
-        false
+        true
+      ]
+    },
+    {
+      "id": 635,
+      "type": "Note",
+      "pos": [
+        753.1231290811004,
+        573.9575664535129
+      ],
+      "size": [
+        285.24835336919455,
+        126.58960944919556
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "Some additional methods not included in the paper, intended to further improve the results. These can be bypassed/removed."
+      ],
+      "color": "#c09430",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 611,
+      "type": "Note",
+      "pos": [
+        1135.9170901232549,
+        950.1203098736455
+      ],
+      "size": [
+        285.24835336919455,
+        126.58960944919556
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "The only relevant values to change are :\n\n- high_scale: \n- low_scale_end: (between 1.0 and 1.5)"
+      ],
+      "color": "#c09430",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 634,
+      "type": "UnofficialExtensions",
+      "pos": [
+        736.8516248256913,
+        767.4503476211383
+      ],
+      "size": [
+        332.76171875,
+        82
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 4,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "unofficial_extensions",
+          "type": "UNTWISTING_ROPE_EXTENSIONS",
+          "links": [
+            1561
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "untwistingrope",
+        "ver": "ec08050c160633dc890972120598e2912ce26870",
+        "Node name for S&R": "UnofficialExtensions"
+      },
+      "widgets_values": [
+        false,
+        0.5
       ]
     }
   ],
@@ -1178,19 +1245,27 @@
       265,
       0,
       "IMAGE"
+    ],
+    [
+      1561,
+      634,
+      0,
+      628,
+      2,
+      "UNTWISTING_ROPE_EXTENSIONS"
     ]
   ],
   "groups": [],
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.5559917313492719,
+      "scale": 0.5054470284993381,
       "offset": [
-        -180.2296065687117,
-        -600.2160835409821
+        -17.881694872136705,
+        -261.27390195795283
       ]
     },
-    "frontendVersion": "1.43.18",
+    "frontendVersion": "1.44.19",
     "workflowRendererVersion": "LG",
     "VHS_latentpreview": false,
     "VHS_latentpreviewrate": 0,
