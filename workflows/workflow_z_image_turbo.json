@@ -1,7 +1,7 @@
 {
   "id": "44259803-f9d6-4eb1-a94a-75b8213649d0",
   "revision": 0,
-  "last_node_id": 626,
+  "last_node_id": 627,
   "last_link_id": 1553,
   "nodes": [
     {
@@ -729,6 +729,18 @@
           "name": "image",
           "type": "IMAGE",
           "link": 1539
+        },
+        {
+          "name": "width",
+          "shape": 7,
+          "type": "INT",
+          "link": null
+        },
+        {
+          "name": "height",
+          "shape": 7,
+          "type": "INT",
+          "link": null
         }
       ],
       "outputs": [
@@ -853,6 +865,29 @@
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
+      "id": 611,
+      "type": "Note",
+      "pos": [
+        1133.528142202805,
+        986.688469823161
+      ],
+      "size": [
+        289.0740052806825,
+        112.57343506692268
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "The only relevant values to change are :\n\n- beta: between 10 and 50\n- high_scale_start: (between 1.0 and 1.15) \n- low_scale_end: (between 3.0 and 4.0)"
+      ],
+      "color": "#c09430",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
       "id": 625,
       "type": "UnofficialExtensions",
       "pos": [
@@ -861,10 +896,10 @@
       ],
       "size": [
         332.76171875,
-        82
+        130
       ],
       "flags": {},
-      "order": 11,
+      "order": 12,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -883,7 +918,9 @@
       },
       "widgets_values": [
         false,
-        0.5
+        0.5,
+        "match_axes",
+        1
       ]
     },
     {
@@ -935,7 +972,7 @@
         "Node name for S&R": "UntwistingRoPE"
       },
       "widgets_values": [
-        15,
+        25,
         1,
         0,
         1,
@@ -944,29 +981,6 @@
         "0-999",
         true
       ]
-    },
-    {
-      "id": 611,
-      "type": "Note",
-      "pos": [
-        1133.528142202805,
-        986.688469823161
-      ],
-      "size": [
-        289.0740052806825,
-        112.57343506692268
-      ],
-      "flags": {},
-      "order": 12,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [],
-      "properties": {},
-      "widgets_values": [
-        "The only relevant values to change are :\n\n- beta: between 10 and 50\n- high_scale_start: (between 1.0 and 1.15) \n- low_scale_end: (between 3.0 and 4.0)"
-      ],
-      "color": "#c09430",
-      "bgcolor": "rgba(24,24,27,.9)"
     }
   ],
   "links": [
@@ -1175,10 +1189,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.7400249944258226,
+      "scale": 0.6115909044841509,
       "offset": [
-        -572.5401596060037,
-        -804.0052684700847
+        -388.02840119678405,
+        -575.6481166537227
       ]
     },
     "frontendVersion": "1.44.19",
