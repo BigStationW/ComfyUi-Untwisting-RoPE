@@ -633,65 +633,6 @@
       ]
     },
     {
-      "id": 623,
-      "type": "UntwistingRoPE",
-      "pos": [
-        1136.956054943152,
-        1171.7011951213472
-      ],
-      "size": [
-        270,
-        270
-      ],
-      "flags": {},
-      "order": 23,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 1549
-        },
-        {
-          "name": "rf_inversion",
-          "shape": 7,
-          "type": "LATENT",
-          "link": 1550
-        },
-        {
-          "name": "unofficial_extensions",
-          "shape": 7,
-          "type": "UNTWISTING_ROPE_EXTENSIONS",
-          "link": 1553
-        }
-      ],
-      "outputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "links": [
-            1551,
-            1552
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "untwistingrope",
-        "ver": "9fb6a19e82077dc54ddb120f202d474d01497cf7",
-        "Node name for S&R": "UntwistingRoPE"
-      },
-      "widgets_values": [
-        5,
-        0.9,
-        0,
-        1,
-        5,
-        0.5,
-        "0-999",
-        true
-      ]
-    },
-    {
       "id": 611,
       "type": "Note",
       "pos": [
@@ -1175,6 +1116,65 @@
       ],
       "color": "#c09430",
       "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 623,
+      "type": "UntwistingRoPE",
+      "pos": [
+        1136.956054943152,
+        1171.7011951213472
+      ],
+      "size": [
+        270,
+        270
+      ],
+      "flags": {},
+      "order": 23,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 1549
+        },
+        {
+          "name": "rf_inversion",
+          "shape": 7,
+          "type": "LATENT",
+          "link": 1550
+        },
+        {
+          "name": "unofficial_extensions",
+          "shape": 7,
+          "type": "UNTWISTING_ROPE_EXTENSIONS",
+          "link": 1553
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "links": [
+            1551,
+            1552
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "untwistingrope",
+        "ver": "9fb6a19e82077dc54ddb120f202d474d01497cf7",
+        "Node name for S&R": "UntwistingRoPE"
+      },
+      "widgets_values": [
+        10,
+        0.9,
+        0,
+        1,
+        5,
+        0.5,
+        "0-999",
+        true
+      ]
     }
   ],
   "links": [
@@ -1431,10 +1431,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.45949729863572725,
+      "scale": 0.6727499949325685,
       "offset": [
-        193.17070782441266,
-        -371.7753562926131
+        -338.2616261674079,
+        -627.9100293479011
       ]
     },
     "frontendVersion": "1.44.19",
