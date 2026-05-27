@@ -10,13 +10,14 @@ _PREFIX = '[UntwistingRoPE]'
 _RF_PREFIX = '[RFInversion]'
 
 def _rf_prefix(stats: Optional[Any] = None) -> str:
-    try:
-        prefix = getattr(stats, 'rf_prefix', None)
-        if isinstance(prefix, str) and prefix:
-            return prefix
-    except Exception:
-        pass
-    return _RF_PREFIX
+    if stats is None:
+        return _RF_PREFIX
+    prefix = getattr(stats, 'rf_prefix', None)
+    if prefix is None:
+        return _RF_PREFIX
+    if not isinstance(prefix, str) or not prefix:
+        raise RuntimeError(f'Invalid RF prefix on stats: {prefix!r}')
+    return prefix
 
 def _coerce_bool(value: Any) -> bool:
     """Robust boolean parsing for ComfyUI values that may arrive as bools or strings."""
@@ -79,7 +80,7 @@ def _rf_tensor_summary(name: str, value: Any) -> str:
             f'min={float(vf.min().item()):.6f} max={float(vf.max().item()):.6f}'
         )
     except Exception as exc:
-        return f'{name}: tensor-summary-failed shape={tuple(value.shape)} err={exc}'
+        raise RuntimeError(f'{_RF_PREFIX} tensor summary failed for {name}; strict mode refuses to hide diagnostic failure: {exc}') from exc
 
 def _rf_sequence_summary(name: str, seq: Any, max_items: int = 8) -> str:
     values = _coerce_sigma_sequence(seq)
@@ -154,7 +155,7 @@ def _rf_tensor_stats(value: Any) -> Dict[str, Any]:
         out['max'] = float(xf.max().item())
         out['max_abs'] = float(xf.abs().max().item())
     except Exception as exc:
-        out['error'] = repr(exc)
+        raise RuntimeError(f'{_RF_PREFIX} tensor stats failed; strict mode refuses to hide diagnostic failure: {exc}') from exc
     return out
 
 def _rf_scalar_fmt(value: Any, digits: int = 6) -> str:
@@ -165,8 +166,8 @@ def _rf_scalar_fmt(value: Any, digits: int = 6) -> str:
         if not math.isfinite(value):
             return str(value)
         return f'{value:.{digits}f}'
-    except Exception:
-        return 'n/a'
+    except Exception as exc:
+        raise RuntimeError(f'{_RF_PREFIX} scalar formatting failed for value={value!r}: {exc}') from exc
 
 def _rf_tensor_mae(a: Any, b: Any) -> Optional[float]:
     if not (torch.is_tensor(a) and torch.is_tensor(b)):
@@ -177,8 +178,8 @@ def _rf_tensor_mae(a: Any, b: Any) -> Optional[float]:
         if aa.shape != bb.shape or aa.numel() == 0:
             return None
         return float((aa - bb).abs().mean().item())
-    except Exception:
-        return None
+    except Exception as exc:
+        raise RuntimeError(f'{_RF_PREFIX} tensor MAE failed; strict mode refuses to hide diagnostic failure: {exc}') from exc
 
 def _rf_tensor_rmse(a: Any, b: Any) -> Optional[float]:
     if not (torch.is_tensor(a) and torch.is_tensor(b)):
@@ -189,8 +190,8 @@ def _rf_tensor_rmse(a: Any, b: Any) -> Optional[float]:
         if aa.shape != bb.shape or aa.numel() == 0:
             return None
         return float((aa - bb).pow(2).mean().sqrt().item())
-    except Exception:
-        return None
+    except Exception as exc:
+        raise RuntimeError(f'{_RF_PREFIX} tensor RMSE failed; strict mode refuses to hide diagnostic failure: {exc}') from exc
 
 def _rf_tensor_cosine(a: Any, b: Any) -> Optional[float]:
     if not (torch.is_tensor(a) and torch.is_tensor(b)):
@@ -204,8 +205,8 @@ def _rf_tensor_cosine(a: Any, b: Any) -> Optional[float]:
         if float(denom.item()) <= 1e-12:
             return None
         return float(torch.dot(aa, bb).div(denom).item())
-    except Exception:
-        return None
+    except Exception as exc:
+        raise RuntimeError(f'{_RF_PREFIX} tensor cosine failed; strict mode refuses to hide diagnostic failure: {exc}') from exc
 
 def _rf_diagnostic_level(summary: Dict[str, Any]) -> str:
     """Return a conservative numerical-health classification for the RF trajectory."""
@@ -228,8 +229,8 @@ def _rf_diagnostic_level(summary: Dict[str, Any]) -> str:
             float(final_eps_std_ratio) < 0.25 or float(final_eps_std_ratio) > 4.0
         ):
             return 'WARN'
-    except Exception:
-        return 'WARN'
+    except Exception as exc:
+        raise RuntimeError(f'{_RF_PREFIX} diagnostic-level calculation failed; strict mode refuses to downgrade to WARN: {exc}') from exc
     return 'PASS'
 
 def _rf_stability_summary(
@@ -274,8 +275,8 @@ def _rf_stability_summary(
         if torch.is_tensor(prev_tensor) and torch.is_tensor(t) and prev_tensor.shape == t.shape:
             try:
                 dz_values.append(float((t.detach().float() - prev_tensor.detach().float()).abs().mean().item()))
-            except Exception:
-                pass
+            except Exception as exc:
+                raise RuntimeError(f'{_RF_PREFIX} Δz diagnostic failed; strict mode refuses to skip it: {exc}') from exc
         prev_tensor = t if torch.is_tensor(t) else None
 
     first = cache.get(keys[0])
@@ -313,8 +314,8 @@ def _rf_stability_summary(
             summary['final_eps_std_ratio'] = float(final_std) / float(eps_std)
         else:
             summary['final_eps_std_ratio'] = None
-    except Exception:
-        summary['final_eps_std_ratio'] = None
+    except Exception as exc:
+        raise RuntimeError(f'{_RF_PREFIX} final/eps std-ratio diagnostic failed; strict mode refuses to hide it: {exc}') from exc
 
     if bad_keys:
         summary['warnings'].append('nonfinite_values')
@@ -448,53 +449,51 @@ def _rf_progress_snapshot(step_i: int, total_steps: int, start_time: float, pers
     print(line, end=end, flush=True)
 
 def _normalize_sigma_float(value: Any) -> Optional[float]:
-    try:
-        if torch.is_tensor(value):
-            v = float(value.detach().float().mean().item())
-        else:
-            v = float(value)
-        if not math.isfinite(v):
-            return None
-        if 0.0 <= v <= 1.0:
-            return max(0.0, min(1.0, v))
-        if 1.0 < v <= 1000.0:
-            return max(0.0, min(1.0, v / 1000.0))
-    except Exception:
-        return None
-    return None
+    if torch.is_tensor(value):
+        v = float(value.detach().float().mean().item())
+    else:
+        v = float(value)
+    if not math.isfinite(v):
+        raise ValueError(f'Invalid sigma/timestep value {value!r}: not finite.')
+    if 0.0 <= v <= 1.0:
+        return max(0.0, min(1.0, v))
+    if 1.0 < v <= 1000.0:
+        return max(0.0, min(1.0, v / 1000.0))
+    raise ValueError(f'Invalid sigma/timestep value {value!r}; expected [0,1] sigma or [1,1000] timestep.')
 
 def _coerce_sigma_sequence(value: Any) -> Optional[List[float]]:
-    """Convert a scheduler sigma/timestep list into normalized [0,1] floats."""
-    try:
-        if value is None:
-            return None
-        if torch.is_tensor(value):
-            flat = value.detach().float().flatten().tolist()
-        elif isinstance(value, (list, tuple)):
-            flat = []
-            for item in value:
-                if torch.is_tensor(item):
-                    flat.extend(item.detach().float().flatten().tolist())
-                elif isinstance(item, (int, float)):
-                    flat.append(float(item))
-                else:
-                    return None
-        else:
-            return None
-        out: List[float] = []
-        for item in flat:
-            s = _normalize_sigma_float(item)
-            if s is not None:
-                out.append(s)
-        if len(out) < 2:
-            return None
-        dedup: List[float] = []
-        for s in out:
-            if not dedup or abs(dedup[-1] - s) > 1e-6:
-                dedup.append(s)
-        return dedup if len(dedup) >= 2 else None
-    except Exception:
+    """Convert a scheduler sigma/timestep list into normalized [0,1] floats.
+
+    Strict mode: malformed schedules raise instead of returning None. A missing
+    value still returns None so callers can distinguish "not provided" from
+    "provided but broken".
+    """
+    if value is None:
         return None
+    if torch.is_tensor(value):
+        flat = value.detach().float().flatten().tolist()
+    elif isinstance(value, (list, tuple)):
+        flat = []
+        for item in value:
+            if torch.is_tensor(item):
+                flat.extend(item.detach().float().flatten().tolist())
+            elif isinstance(item, (int, float)):
+                flat.append(float(item))
+            else:
+                raise ValueError(f'Invalid sigma sequence item {item!r}; expected tensor/int/float.')
+    else:
+        raise ValueError(f'Invalid sigma sequence type {type(value).__name__}; expected tensor/list/tuple.')
+
+    out: List[float] = [_normalize_sigma_float(item) for item in flat]
+    if len(out) < 2:
+        raise ValueError(f'Invalid sigma sequence; expected at least 2 values, got {len(out)}.')
+    dedup: List[float] = []
+    for sigma in out:
+        if not dedup or abs(dedup[-1] - sigma) > 1e-6:
+            dedup.append(sigma)
+    if len(dedup) < 2:
+        raise ValueError(f'Invalid sigma sequence; deduplicated length is {len(dedup)}.')
+    return dedup
 
 def _rf_print_sampler_capture(verbose_flag: Any, found: Any, run_count: Any) -> None:
     if not _coerce_bool(verbose_flag):
@@ -550,8 +549,9 @@ def _rf_print_build_complete(
 
 
 def _rf_print_direct_fallback(verbose_flag: Any, sigma: float) -> None:
-    if _coerce_bool(verbose_flag):
-        print(f'{_RF_PREFIX}   ⚠ No sampler sigmas captured yet; direct one-step RF fallback for σ={float(sigma):.6f}')
+    raise RuntimeError(
+        f'{_RF_PREFIX} No sampler sigmas captured; direct one-step RF path is disabled for σ={float(sigma):.6f}'
+    )
 
 
 def _rf_print_traceback(verbose_flag: Any, trace_text: str) -> None:
@@ -590,32 +590,26 @@ def _rf_print_prepared(
 
 def _untwist_format_scale_value(value: Any) -> str:
     """Format one scale value for compact debug logs without noisy trailing zeros."""
-    try:
-        value_f = float(value)
-        if not math.isfinite(value_f):
-            return str(value_f)
-        text = f'{value_f:.6f}'.rstrip('0').rstrip('.')
-        return text if text else '0'
-    except Exception:
-        return 'n/a'
+    value_f = float(value)
+    if not math.isfinite(value_f):
+        raise ValueError(f'Invalid RoPE scale value {value!r}: not finite.')
+    text = f'{value_f:.6f}'.rstrip('0').rstrip('.')
+    return text if text else '0'
 
 
 def _untwist_scale_range(values: Any) -> str:
     """Return a compact [first ... last] summary from a 1D scale tensor/list."""
-    try:
-        if torch.is_tensor(values):
-            if values.numel() <= 0:
-                return '[]'
-            flat = values.detach().float().flatten().to(device='cpu')
-        else:
-            flat = torch.as_tensor(values, dtype=torch.float32).flatten()
-            if flat.numel() <= 0:
-                return '[]'
-        first = _untwist_format_scale_value(float(flat[0].item()))
-        last = _untwist_format_scale_value(float(flat[-1].item()))
-        return f'[{first} ... {last}]'
-    except Exception:
-        return '[]'
+    if torch.is_tensor(values):
+        if values.numel() <= 0:
+            raise ValueError('Cannot summarize empty RoPE scale tensor.')
+        flat = values.detach().float().flatten().to(device='cpu')
+    else:
+        flat = torch.as_tensor(values, dtype=torch.float32).flatten()
+        if flat.numel() <= 0:
+            raise ValueError('Cannot summarize empty RoPE scale values.')
+    first = _untwist_format_scale_value(float(flat[0].item()))
+    last = _untwist_format_scale_value(float(flat[-1].item()))
+    return f'[{first} ... {last}]'
 
 
 _AXIS0_ROPE_MODES = {'default', 'match_axes', 'constant'}
@@ -624,10 +618,8 @@ def _untwist_coerce_axis0_rope_mode(value: Any = None, legacy_scale: Any = None)
     """Mirror the main node's axis-0 RoPE mode normalization for debug output."""
     if value is None:
         if legacy_scale is not None:
-            try:
-                return 'default' if float(legacy_scale) < 0.0 else 'constant'
-            except Exception:
-                pass
+            legacy_f = float(legacy_scale)
+            return 'default' if legacy_f < 0.0 else 'constant'
         return 'default'
 
     mode = str(value or 'default').strip().lower().replace('-', '_').replace(' ', '_')
@@ -645,17 +637,18 @@ def _untwist_coerce_axis0_rope_mode(value: Any = None, legacy_scale: Any = None)
         'fixed': 'constant',
     }
     mode = aliases.get(mode, mode)
-    return mode if mode in _AXIS0_ROPE_MODES else 'default'
+    if mode not in _AXIS0_ROPE_MODES:
+        raise ValueError(f'Invalid axis0_rope_mode={value!r}; expected one of {sorted(_AXIS0_ROPE_MODES)}.')
+    return mode
 
 def _untwist_coerce_axis0_rope_scale(value: Any, default: float = 0.0) -> float:
     """Debug-side formatting clamp: axis0_rope_scale is non-negative now."""
-    try:
-        value_f = float(value)
-    except Exception:
-        value_f = float(default)
+    value_f = float(value)
     if not math.isfinite(value_f):
-        value_f = float(default)
-    return max(0.0, value_f)
+        raise ValueError(f'Invalid axis0_rope_scale={value!r}: not finite.')
+    if value_f < 0.0:
+        raise ValueError(f'Invalid axis0_rope_scale={value_f!r}; expected non-negative value.')
+    return value_f
 
 
 def _untwist_print_rope_scale_debug(
@@ -712,7 +705,7 @@ def _untwist_print_rope_scale_debug(
         print(f'{_PREFIX}   axis0={_untwist_scale_range(axis0)}')
         print(f'{_PREFIX}   axis1+={_untwist_scale_range(axis1_plus)}')
     except Exception as exc:
-        print(f'{_PREFIX} ⚠ RoPE scale debug print failed: {exc}')
+        raise RuntimeError(f'{_PREFIX} RoPE scale debug print failed; strict mode refuses to hide debug failure: {exc}') from exc
 
 
 def _untwist_print_rope_scale_debug_from_cfg(
@@ -723,7 +716,7 @@ def _untwist_print_rope_scale_debug_from_cfg(
     dtype: Any,
     build_frequency_scale_vector: Any,
 ) -> None:
-    """Fallback RoPE debug print for adapter attention paths.
+    """Strict RoPE debug print for adapter attention paths.
 
     The actual scale-vector builder stays in the main module and is passed in here
     so verbose_prints owns the formatting/printing without creating import cycles.
@@ -731,11 +724,11 @@ def _untwist_print_rope_scale_debug_from_cfg(
     if not isinstance(cfg, dict) or cfg.get('_rope_scale_debug_printed', False):
         return
     if not callable(build_frequency_scale_vector):
-        return
+        raise RuntimeError('RoPE scale debug requires callable build_frequency_scale_vector.')
     try:
         head_dim = int(cfg.get('head_dim', 0))
         if head_dim <= 0:
-            return
+            raise RuntimeError(f'RoPE scale debug requires positive head_dim, got {head_dim}.')
 
         progress = float(cfg.get('progress', 0.0))
         high_start = float(cfg['high_scale_start'])
@@ -749,32 +742,19 @@ def _untwist_print_rope_scale_debug_from_cfg(
         cfg['_debug_high_scale'] = float(high_scale)
         cfg['_debug_low_scale'] = float(low_scale)
 
-        try:
-            scale_vec = build_frequency_scale_vector(
-                head_dim,
-                cfg.get('axes_dims') or [],
-                high_scale,
-                low_scale,
-                beta,
-                device,
-                dtype,
-                runtime_cfg=cfg,
-            )
-        except TypeError:
-            # Compatibility for older main modules without runtime_cfg support.
-            scale_vec = build_frequency_scale_vector(
-                head_dim,
-                cfg.get('axes_dims') or [],
-                high_scale,
-                low_scale,
-                beta,
-                device,
-                dtype,
-                cfg.get('axis0_rope_scale', -1.0),
-            )
+        scale_vec = build_frequency_scale_vector(
+            head_dim,
+            cfg.get('axes_dims') or [],
+            high_scale,
+            low_scale,
+            beta,
+            device,
+            dtype,
+            runtime_cfg=cfg,
+        )
         _untwist_print_rope_scale_debug(stats, cfg, module_name, scale_vec)
     except Exception as exc:
-        print(f'{_PREFIX} ⚠ RoPE scale debug fallback failed: {exc}')
+        raise RuntimeError(f'{_PREFIX} RoPE scale debug failed; strict mode refuses to hide failure: {exc}') from exc
 
 def _untwist_print_patch_complete(stats: Optional[_RuntimeStats], rf_active: bool, adapter: Any) -> None:
     _vprint(stats, f'\n{_PREFIX} ═══════════════════════════════════════')
