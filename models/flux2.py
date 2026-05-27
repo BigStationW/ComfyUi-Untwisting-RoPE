@@ -390,7 +390,7 @@ def patch_attention_modules(
     dm: Any,
     stats: Any,
     helpers: dict[str, Any] | None = None,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, list[str]]:
     """Patch ComfyUI FLUX/FLUX.2 DoubleStreamBlock and SingleStreamBlock forwards.
 
     This architecture-specific implementation intentionally lives in the adapter
@@ -774,19 +774,7 @@ def patch_attention_modules(
         setattr(block, "_untwist_flux2_active", True)
         installed += 1
 
-    # Keep logs generic enough that only this adapter mentions the architecture.
-    try:
-        verbose_print = getattr(__import__("builtins"), "print")
-        # ``vp._vprint`` is not passed through helpers, so use normal print only for fatal/no-op.
-        if _verbose_enabled():
-            print(f"{prefix} {DISPLAY_NAME} attention patch: matched={matched} installed={installed} restored={restored}")
-            for n in patched_names:
-                print(f"{prefix}   - {n}")
-    except Exception:
-        pass
-
-    assert installed > 0, f"{prefix} FATAL: No {DISPLAY_NAME} double/single blocks patched."
-    return matched, installed, restored
+    return matched, installed, restored, patched_names
 
 
 def uses_reference_branch_kv() -> bool:
