@@ -26,6 +26,10 @@ Restart ComfyUI after installation.
 ## Usage
 
 - Here's [some workflows](https://github.com/BigStationW/ComfyUi-Untwisting-RoPE/tree/main/workflows) for those interested.
-- You also need this [custom node](https://github.com/BigStationW/ComfyUi-Scale-Image-to-Total-Pixels-Advanced) to make it work.
+- You also need these custom nodes to make those workflows work.
+
+https://github.com/BigStationW/ComfyUi-Scale-Image-to-Total-Pixels-Advanced
+
+https://github.com/BigStationW/ComfyUi-TextEncodeEditAdvanced
 
 Don't hesitate to consult [the documentation](https://github.com/BigStationW/ComfyUi-Untwisting-RoPE/tree/main/documentation) to better understand this repository.
