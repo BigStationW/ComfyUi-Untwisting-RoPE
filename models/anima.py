@@ -133,17 +133,9 @@ def default_runtime_cfg(dm: Any | None = None) -> dict[str, Any]:
 # Adapter-owned optional reference-conditioning preprocessing and attention patch.
 # Keeping this here is what lets the top-level __init__.py stay model-neutral.
 
-import traceback
 import types
 import torch
 from typing import Optional, Tuple
-
-
-def _coerce_bool(value: Any) -> bool:
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on", "y", "t")
-    return bool(value)
-
 
 def _first_tensor_in_conditioning_entry(entry: Any) -> Tuple[Optional[torch.Tensor], dict[str, Any]]:
     meta: dict[str, Any] = {}
