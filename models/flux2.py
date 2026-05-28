@@ -68,23 +68,6 @@ def _coerce_bool(value: Any) -> bool:
         return value.strip().lower() in ("1", "true", "yes", "on", "y", "t")
     return bool(value)
 
-
-def _coerce_strength01(value: Any, default: float = 0.0) -> float:
-    try:
-        strength = float(value)
-    except Exception as exc:
-        raise ValueError(f"Invalid strength value {value!r}; expected a finite float in [0, 1].") from exc
-    if not torch.isfinite(torch.tensor(strength)):
-        raise ValueError(f"Invalid strength value {value!r}; expected a finite float in [0, 1].")
-    if not 0.0 <= strength <= 1.0:
-        raise ValueError(f"Invalid strength value {strength!r}; expected value in [0, 1].")
-    return strength
-
-
-def _lerp(a: float, b: float, t: float) -> float:
-    return float(a + (b - a) * t)
-
-
 # ---------------------------------------------------------------------------
 # Required hooks
 # ---------------------------------------------------------------------------
@@ -243,22 +226,6 @@ def iter_flux2_patch_targets(dm: Any, min_layer: int = 0, max_layer: int = 999):
 # Local reusable math/AdaIN helpers for the adapter-owned patch
 # ---------------------------------------------------------------------------
 
-def _adain(target: torch.Tensor, style: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    t_mean = target.mean(dim=1, keepdim=True)
-    s_mean = style.mean(dim=1, keepdim=True)
-    t_std = target.float().var(dim=1, keepdim=True, unbiased=False).add(eps).sqrt().to(target.dtype)
-    s_std = style.float().var(dim=1, keepdim=True, unbiased=False).add(eps).sqrt().to(target.dtype)
-    return (target - t_mean) / t_std * s_std + s_mean
-
-
-def _local_cross_batch_adain_qk(*_args, **_kwargs):
-    raise RuntimeError("FLUX.2 missing required helper cross_batch_adain_qk; strict mode requires the top-level helper.")
-
-
-def _local_build_frequency_scale_vector(*_args, **_kwargs):
-    raise RuntimeError("FLUX.2 missing required helper build_frequency_scale_vector; strict mode requires the top-level helper.")
-
-
 def _flux_kv_heads_if_needed(k: torch.Tensor, v: torch.Tensor, q_heads: int) -> tuple[torch.Tensor, torch.Tensor]:
     """Expand KV heads for FLUX tensors in [B,H,S,D] layout."""
     kv = int(k.shape[1])
@@ -294,8 +261,6 @@ def _flux_slice_mask(mask: Any, start: int, end: int):
     if mask is None:
         return None
     return mask[int(start): int(end)]
-
-
 
 # ---------------------------------------------------------------------------
 # Optional conditioning / patch hooks
@@ -342,9 +307,6 @@ def patch_attention_modules(
         from comfy.ldm.flux.layers import apply_mod
     except Exception as exc:
         raise RuntimeError(f"{prefix} Could not import FLUX layers.apply_mod: {exc}")
-
-    def _verbose_enabled() -> bool:
-        return _coerce_bool(getattr(stats, "verbose", False)) or _coerce_bool(getattr(stats, "rf_verbose", False))
 
     def _reference_attention(
         q: torch.Tensor,
