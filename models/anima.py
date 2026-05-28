@@ -287,6 +287,7 @@ def patch_attention_modules(dm: Any, stats: Any, helpers: dict[str, Any] | None 
     lerp = helpers["lerp"]
     cross_batch_adain_qk = helpers["cross_batch_adain_qk"]
     build_frequency_scale_vector = helpers["build_frequency_scale_vector"]
+    apply_qkv_shared_effects = helpers["apply_qkv_shared_effects"]
 
     matched = installed = restored = 0
     patched_names: list[str] = []
@@ -351,6 +352,15 @@ def patch_attention_modules(dm: Any, stats: Any, helpers: dict[str, Any] | None 
                     if cfg.get("apply_adain") and float(cfg.get("adain_strength", 0)) > 0:
                         q, k = q.clone(), k.clone()
                         q, k = cross_batch_adain_qk(q, k, cfg, target_bsz, float(cfg["adain_strength"]))
+
+                    q, k, v = apply_qkv_shared_effects(
+                        q, k, v,
+                        cfg,
+                        target_bsz,
+                        module_name,
+                        layout="BSHD",
+                        token_ranges=cfg.get("target_qk_adain_ranges", None),
+                    )
 
                     try:
                         head_dim = int(self.head_dim)
