@@ -401,45 +401,6 @@ def _slice_mask(mask: Any, start: int, end: int) -> Optional[torch.Tensor]:
     return mask[int(start): int(end)]
 
 
-def _qwen_adain_qkv_for_image_range(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    cfg: dict[str, Any],
-    target_bsz: int,
-    image_range: tuple[int, int],
-    cross_batch_adain_qk,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Run shared AdaIN helper on Qwen [B,H,S,D] tensors over image tokens only."""
-    if not cfg.get("apply_adain") or float(cfg.get("adain_strength", 0.0)) <= 0.0:
-        return q, k, v
-
-    s, e = int(image_range[0]), int(image_range[1])
-    if e <= s:
-        return q, k, v
-
-    q_bshd = q.movedim(1, 2).clone()
-    k_bshd = k.movedim(1, 2).clone()
-    v_bshd = v.movedim(1, 2).clone() if _coerce_bool(cfg.get("adain_on_v", False)) else None
-
-    cfg_local = dict(cfg)
-    cfg_local["target_qk_adain_ranges"] = [(s, e)]
-    out = cross_batch_adain_qk(
-        q_bshd,
-        k_bshd,
-        cfg_local,
-        int(target_bsz),
-        float(cfg.get("adain_strength", 0.0)),
-        xv=v_bshd,
-    )
-
-    if v_bshd is not None:
-        q_bshd, k_bshd, v_bshd = out
-        v = v_bshd.movedim(1, 2)
-    else:
-        q_bshd, k_bshd = out
-    return q_bshd.movedim(1, 2), k_bshd.movedim(1, 2), v
-
 
 def _attention_with_reference_kv(
     q: torch.Tensor,
@@ -517,14 +478,10 @@ def _attention_with_reference_kv(
     cfg["ref_k_ranges"] = [(int(img_s), int(img_e))]
     cfg["target_qk_adain_ranges"] = [(int(img_s), int(img_e))]
 
-    cross_batch_adain_qk = helpers["cross_batch_adain_qk"]
     build_frequency_scale_vector = helpers["build_frequency_scale_vector"]
     apply_qkv_shared_effects = helpers["apply_qkv_shared_effects"]
+    apply_attention_output_shared_effects = helpers["apply_attention_output_shared_effects"]
     lerp = helpers["lerp"]
-
-    q, k, v = _qwen_adain_qkv_for_image_range(
-        q, k, v, cfg, target_bsz, (img_s, img_e), cross_batch_adain_qk
-    )
 
     q, k, v = apply_qkv_shared_effects(
         q, k, v,
@@ -593,18 +550,14 @@ def _attention_with_reference_kv(
         skip_reshape=True, transformer_options=transformer_options,
     )
 
-    # Post-attention AdaIN is intentionally limited to actual target image tokens.
-    post_a = _coerce_strength01(cfg.get("post_attention_adain_strength", 0.0))
-    if post_a > 0.0:
-        out_t = out_t.clone()
-        out_t_img = out_t[:, img_s:img_e]
-        out_r_img = out_r[:, img_s:img_e]
-        if out_t_img.shape != out_r_img.shape:
-            raise RuntimeError(
-                f"{DISPLAY_NAME} post-attention AdaIN shape mismatch in {module_name}: "
-                f"target={tuple(out_t_img.shape)} ref={tuple(out_r_img.shape)}."
-            )
-        out_t[:, img_s:img_e] = out_t_img * (1.0 - post_a) + _adain(out_t_img, out_r_img) * post_a
+    out_t, out_r = apply_attention_output_shared_effects(
+        out_t, out_r,
+        cfg,
+        target_bsz,
+        module_name,
+        layout="BSD",
+        token_ranges=[(img_s, img_e)],
+    )
 
     outs = [out_t, out_r]
 
@@ -656,7 +609,7 @@ def patch_attention_modules(
     prefix = str(helpers.get("prefix", "[UntwistingRoPE]"))
     config_key = str(helpers.get("config_key", CONFIG_KEY))
 
-    required_helpers = ("lerp", "cross_batch_adain_qk", "build_frequency_scale_vector", "apply_qkv_shared_effects")
+    required_helpers = ("lerp", "build_frequency_scale_vector", "apply_qkv_shared_effects", "apply_attention_output_shared_effects")
     missing = [name for name in required_helpers if not callable(helpers.get(name))]
     if missing:
         raise RuntimeError(f"{DISPLAY_NAME} adapter missing required helper(s): {missing}")
