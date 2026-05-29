@@ -28,8 +28,8 @@ You have three choices:
 - `match_axes` -> axis0 ends up behaving exactly like the other axes (best results).
 - `constant` -> You set up your own `axis0_rope_scale` value 
 
-## `v_injection_strength`
+## `orthogonal_v_injection`
 
-Controls how much the target `V` tensor is directly blended toward the reference `V` tensor, forcing stronger texture/color/style transfer.
+Uses Gram-Schmidt projection to inject only the orthogonal component of the reference V tensor to the target V tensor, transferring texture/color/style while reducing semantic bleed.
 
 Gives pretty good results at low strength (~0.2).
