@@ -11,7 +11,7 @@ RF Inversion builds a noisy trajectory on the reference image, so the model sees
 | `rf_mode` | `rf_gamma_rk2` | Selects the ODE solver used to build the noisy reference trajectory: `linear` (no model calls -> random noise), `rf_gamma` (Euler), `rf_gamma_rk2` (Runge-Kutta midpoint), or `fireflow` [(FireFlow recurrence)](https://arxiv.org/abs/2412.07517?utm_source=chatgpt.com). |
 | `gamma` | `0.50` | Blends weight between model velocity and prior velocity (0 = pure prior / straight path, 1 = pure model); only used by `rf_gamma` and `rf_gamma_rk2`. |
 | `gamma_curve` | `2.00` | Applies a bell-shaped schedule to `gamma` across the sigma range, concentrating model influence toward mid-noise levels; 0 disables the curve. |
-| `norm_strength` | `1.00` | After each RF step, blends the latent's mean/std toward the linear target to prevent feature drift; 0 = off, 1 = full correction. |
+| `norm_strength` | `1.00` | After each RF step, blends the latent's mean/std towards the linear target to prevent feature drift; 0 = off, 1 = full correction. |
 | `pmi_alpha` | `0.50` | [PMI (Proximal-Mean Inversion)](https://arxiv.org/abs/2602.11850) smooths out the velocity estimation by using a running mean across steps, 0 disables PMI. |
 
 ---
@@ -22,9 +22,9 @@ Untwisting RoPE patches the model's attention layers to let the target image att
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `rf_inversion` | *(optional)* | Fetches the inverted noisy latents created by the `RF Inversion node`. |
+| `rf_inversion` | *(optional)* | Fetches the inverted noisy latents created by the `RF Inversion` node. |
 | `beta` | `50.00` | Controls the steepness of the frequency scale curve. Higher values prevent the model from copying the reference image too closely. |
 | `high_scale` | `1.05`  | Scale applied to high-frequency components. The higher the value, the more the final image will resemble the structure of the reference image.|
-| `low_scale` | `3.0` | Scale applied to low-frequency components. Controls the strength of the style image. |
+| `low_scale` | `3.0` | Scale applied to low-frequency components. Basically controls the strength of the style transfer. |
 | `adain_strength` | `0.50` | [AdaIN (Arbitrary Style Transfer in Real-time with Adaptive Instance Normalization)](https://arxiv.org/abs/1703.06868) aligns the target style statistics toward the reference. |
 | `blocks` | `0-999` | Block indices to which the reference attention patch is applied. |
