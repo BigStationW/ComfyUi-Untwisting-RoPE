@@ -2,12 +2,6 @@
 
 These options are experimental and are not part of the original Untwisting RoPE paper.
 
-## `adain_on_v`
-
-Extends AdaIN alignment from attention `Q/K` to also include `V`.
-
-This can help ensure that the final image has a color scheme similar to that of the reference image.
-
 ## `post_attention_adain`
 
  Matches the target attention output statistics to the reference attention output.
@@ -44,4 +38,4 @@ Can work well at full strength for making images look cleaner.
 
 Applies AdaIN to the target V tensor but only on reference channels with high variance.
 
-This makes the image even cleaner and further enhances the transfer style at full strength.
+This makes the image even cleaner and further enhances the transfer style.
