@@ -1,8 +1,8 @@
 {
   "id": "44259803-f9d6-4eb1-a94a-75b8213649d0",
   "revision": 0,
-  "last_node_id": 631,
-  "last_link_id": 1556,
+  "last_node_id": 632,
+  "last_link_id": 1557,
   "nodes": [
     {
       "id": 333,
@@ -526,43 +526,6 @@
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 625,
-      "type": "UnofficialExtensions",
-      "pos": [
-        751.7264207977231,
-        678.844885774481
-      ],
-      "size": [
-        332.76171875,
-        154
-      ],
-      "flags": {},
-      "order": 5,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "unofficial_extensions",
-          "type": "UNTWISTING_ROPE_EXTENSIONS",
-          "links": [
-            1553
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "untwistingrope",
-        "ver": "ec08050c160633dc890972120598e2912ce26870",
-        "Node name for S&R": "UnofficialExtensions"
-      },
-      "widgets_values": [
-        false,
-        0.5,
-        "default",
-        1,
-        0.2
-      ]
-    },
-    {
       "id": 618,
       "type": "CLIPLoader",
       "pos": [
@@ -574,7 +537,7 @@
         106
       ],
       "flags": {},
-      "order": 6,
+      "order": 5,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -718,7 +681,7 @@
         314.0000000000001
       ],
       "flags": {},
-      "order": 7,
+      "order": 6,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -798,7 +761,7 @@
         58
       ],
       "flags": {},
-      "order": 8,
+      "order": 7,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -832,7 +795,7 @@
         112.57343506692268
       ],
       "flags": {},
-      "order": 9,
+      "order": 8,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -872,7 +835,7 @@
           "name": "unofficial_extensions",
           "shape": 7,
           "type": "UNTWISTING_ROPE_EXTENSIONS",
-          "link": 1553
+          "link": 1557
         }
       ],
       "outputs": [
@@ -913,7 +876,7 @@
         112.57343506692268
       ],
       "flags": {},
-      "order": 10,
+      "order": 9,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -936,7 +899,7 @@
         116.00450279158758
       ],
       "flags": {},
-      "order": 11,
+      "order": 10,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -999,7 +962,7 @@
         102.39426790580865
       ],
       "flags": {},
-      "order": 12,
+      "order": 11,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1033,7 +996,7 @@
         116.00450279158758
       ],
       "flags": {},
-      "order": 13,
+      "order": 12,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -1043,6 +1006,44 @@
       ],
       "color": "#c09430",
       "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 632,
+      "type": "UnofficialExtensions",
+      "pos": [
+        752.5310568276018,
+        670.1668113729768
+      ],
+      "size": [
+        332.76171875,
+        178
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "unofficial_extensions",
+          "type": "UNTWISTING_ROPE_EXTENSIONS",
+          "links": [
+            1557
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "untwistingrope",
+        "ver": "ec08050c160633dc890972120598e2912ce26870",
+        "Node name for S&R": "UnofficialExtensions"
+      },
+      "widgets_values": [
+        0.5,
+        "match_axes",
+        1,
+        0.2,
+        1,
+        1
+      ]
     }
   ],
   "links": [
@@ -1231,14 +1232,6 @@
       "MODEL"
     ],
     [
-      1553,
-      625,
-      0,
-      623,
-      2,
-      "UNTWISTING_ROPE_EXTENSIONS"
-    ],
-    [
       1555,
       601,
       0,
@@ -1253,16 +1246,24 @@
       603,
       0,
       "MODEL"
+    ],
+    [
+      1557,
+      632,
+      0,
+      623,
+      2,
+      "UNTWISTING_ROPE_EXTENSIONS"
     ]
   ],
   "groups": [],
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.259374246010003,
+      "scale": 0.4594972986357272,
       "offset": [
-        867.7602263232673,
-        -27.395839117563327
+        77.36146953901073,
+        -113.1092007077242
       ]
     },
     "frontendVersion": "1.44.19",
