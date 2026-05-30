@@ -1922,7 +1922,7 @@ def _rf_make_preview_callback(model_for_preview: Any, total_steps: int) -> Optio
     try:
         return latent_preview.prepare_callback(model_for_preview, total_steps)
     except Exception as exc:
-        raise RuntimeError('RF preview callback creation failed in strict mode.') from exc
+        raise RuntimeError('RF preview callback creation failed.') from exc
 
 def _rf_emit_preview(
     callback: Optional[Callable[[int, torch.Tensor, torch.Tensor, int], None]],
@@ -2336,7 +2336,7 @@ class RFInversion:
                 state['last_error'] = repr(exc)
                 debug_store['last_error'] = repr(exc)
                 vp._rf_print_traceback(True, traceback.format_exc())
-                raise RuntimeError('RFInversion standalone wrapper failed in strict mode.') from exc
+                raise RuntimeError('RFInversion standalone wrapper failed in.') from exc
 
             if old_model_function_wrapper is not None:
                 return old_model_function_wrapper(apply_model, args)
@@ -2823,7 +2823,7 @@ class UntwistingRoPE:
                             f'ref_noisy={tuple(ref_noisy.shape[-2:])}.'
                         )
                 except Exception as exc:
-                    raise RuntimeError('UntwistingRoPE RF latent preparation failed in strict mode.') from exc
+                    raise RuntimeError('UntwistingRoPE RF latent preparation failed. Make sure the resolution of the reference image fed into the RF inversion node matches the final image resolution (same width and height).') from exc
 
             c['transformer_options'] = to
 
