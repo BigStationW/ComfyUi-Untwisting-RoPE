@@ -22,11 +22,13 @@ You have three choices:
 - `match_axes` -> axis0 ends up behaving exactly like the other axes (best results).
 - `constant` -> You set up your own `axis0_rope_scale` value 
 
-## `orthogonal_v_injection`
+## `cosine_gated_v_injection`
 
-Uses Gram-Schmidt projection to inject only the orthogonal component of the reference V tensor to the target V tensor, transferring texture/color/style while reducing semantic bleed.
+Injects reference V into target V only where their cosine similarity is positive.
 
-Gives pretty good results at low strength (~0.2).
+This makes V injection less aggressive than a plain blend and reduces artifacts from pushing reference features into unrelated target regions.
+
+Conceptually inspired by [CACTIF's similarity-filtered attention](https://arxiv.org/abs/2505.16360), but implemented here as a lightweight token-local V-space gate.
 
 ## `attention_entropy_scaling`
 
