@@ -1,8 +1,8 @@
 {
   "id": "44259803-f9d6-4eb1-a94a-75b8213649d0",
   "revision": 0,
-  "last_node_id": 632,
-  "last_link_id": 1564,
+  "last_node_id": 633,
+  "last_link_id": 1565,
   "nodes": [
     {
       "id": 333,
@@ -451,7 +451,6 @@
         },
         {
           "name": "ref_conditioning",
-          "shape": 7,
           "type": "CONDITIONING",
           "link": 1563
         }
@@ -488,40 +487,6 @@
       ]
     },
     {
-      "id": 625,
-      "type": "UnofficialExtensions",
-      "pos": [
-        756.9930458838446,
-        752.5776369801828
-      ],
-      "size": [
-        332.76171875,
-        82
-      ],
-      "flags": {},
-      "order": 5,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "unofficial_extensions",
-          "type": "UNTWISTING_ROPE_EXTENSIONS",
-          "links": [
-            1553
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "untwistingrope",
-        "ver": "ec08050c160633dc890972120598e2912ce26870",
-        "Node name for S&R": "UnofficialExtensions"
-      },
-      "widgets_values": [
-        false,
-        0.5
-      ]
-    },
-    {
       "id": 618,
       "type": "CLIPLoader",
       "pos": [
@@ -533,7 +498,7 @@
         106
       ],
       "flags": {},
-      "order": 6,
+      "order": 5,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -569,7 +534,7 @@
         102.39426790580865
       ],
       "flags": {},
-      "order": 7,
+      "order": 6,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -644,7 +609,7 @@
         190.5600226272877
       ],
       "flags": {},
-      "order": 8,
+      "order": 7,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -667,7 +632,7 @@
         126.58960944919556
       ],
       "flags": {},
-      "order": 9,
+      "order": 8,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -731,10 +696,10 @@
         }
       ],
       "properties": {
-        "aux_id": "BigStationW/ComfyUi-Scale-Image-to-Total-Pixels-Advanced",
+        "cnr_id": "scale-image-to-total-pixels-advanced",
         "ver": "dd4135f4ee6dcd71443e2935ceb5c037e3f23230",
         "Node name for S&R": "ImageScaleToTotalPixelsX",
-        "cnr_id": "scale-image-to-total-pixels-advanced"
+        "aux_id": "BigStationW/ComfyUi-Scale-Image-to-Total-Pixels-Advanced"
       },
       "widgets_values": [
         1.05,
@@ -802,10 +767,10 @@
         }
       ],
       "properties": {
-        "aux_id": "BigStationW/ComfyUi-Scale-Image-to-Total-Pixels-Advanced",
+        "cnr_id": "scale-image-to-total-pixels-advanced",
         "ver": "dd4135f4ee6dcd71443e2935ceb5c037e3f23230",
         "Node name for S&R": "ImageScaleToTotalPixelsX",
-        "cnr_id": "scale-image-to-total-pixels-advanced"
+        "aux_id": "BigStationW/ComfyUi-Scale-Image-to-Total-Pixels-Advanced"
       },
       "widgets_values": [
         1.05,
@@ -826,7 +791,7 @@
         58
       ],
       "flags": {},
-      "order": 10,
+      "order": 9,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -861,7 +826,7 @@
         314.00000000000006
       ],
       "flags": {},
-      "order": 11,
+      "order": 10,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -901,7 +866,7 @@
         314.00000000000006
       ],
       "flags": {},
-      "order": 12,
+      "order": 11,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1019,7 +984,7 @@
         112.57343506692268
       ],
       "flags": {},
-      "order": 13,
+      "order": 12,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -1106,7 +1071,7 @@
         112.57343506692268
       ],
       "flags": {},
-      "order": 14,
+      "order": 13,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -1139,7 +1104,6 @@
         },
         {
           "name": "rf_inversion",
-          "shape": 7,
           "type": "LATENT",
           "link": 1550
         },
@@ -1147,7 +1111,7 @@
           "name": "unofficial_extensions",
           "shape": 7,
           "type": "UNTWISTING_ROPE_EXTENSIONS",
-          "link": 1553
+          "link": 1565
         }
       ],
       "outputs": [
@@ -1174,6 +1138,44 @@
         0.5,
         "0-999",
         true
+      ]
+    },
+    {
+      "id": 633,
+      "type": "UnofficialExtensions",
+      "pos": [
+        753.4727968732204,
+        735.4289354061756
+      ],
+      "size": [
+        332.76171875,
+        178
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "unofficial_extensions",
+          "type": "UNTWISTING_ROPE_EXTENSIONS",
+          "links": [
+            1565
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "untwistingrope",
+        "ver": "ec08050c160633dc890972120598e2912ce26870",
+        "Node name for S&R": "UnofficialExtensions"
+      },
+      "widgets_values": [
+        0.5,
+        "match_axes",
+        1,
+        0.2,
+        1,
+        1
       ]
     }
   ],
@@ -1339,14 +1341,6 @@
       "MODEL"
     ],
     [
-      1553,
-      625,
-      0,
-      623,
-      2,
-      "UNTWISTING_ROPE_EXTENSIONS"
-    ],
-    [
       1555,
       629,
       0,
@@ -1425,6 +1419,14 @@
       559,
       1,
       "CONDITIONING"
+    ],
+    [
+      1565,
+      633,
+      0,
+      623,
+      2,
+      "UNTWISTING_ROPE_EXTENSIONS"
     ]
   ],
   "groups": [],
@@ -1433,8 +1435,8 @@
     "ds": {
       "scale": 0.6727499949325685,
       "offset": [
-        -338.2616261674079,
-        -627.9100293479011
+        -310.51478536127786,
+        -424.26825895482676
       ]
     },
     "frontendVersion": "1.44.19",
