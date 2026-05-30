@@ -343,7 +343,6 @@
         },
         {
           "name": "ref_conditioning",
-          "shape": 7,
           "type": "CONDITIONING",
           "link": 1535
         }
@@ -849,7 +848,6 @@
         },
         {
           "name": "rf_inversion",
-          "shape": 7,
           "type": "LATENT",
           "link": 1555
         },
@@ -949,7 +947,6 @@
         },
         {
           "name": "rf_inversion",
-          "shape": 7,
           "type": "LATENT",
           "link": null
         },
@@ -1039,7 +1036,7 @@
       ],
       "size": [
         332.76171875,
-        130
+        178
       ],
       "flags": {},
       "order": 13,
@@ -1060,9 +1057,11 @@
         "Node name for S&R": "UnofficialExtensions"
       },
       "widgets_values": [
-        false,
-        0.5,
+        0.1,
         "match_axes",
+        1,
+        0.2,
+        1,
         1
       ]
     }
@@ -1273,10 +1272,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.5559917313492722,
+      "scale": 0.8140274938684695,
       "offset": [
-        -62.29068115768874,
-        -429.91256004902806
+        -401.60919568028396,
+        -554.686724023902
       ]
     },
     "frontendVersion": "1.44.19",
