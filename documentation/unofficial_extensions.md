@@ -41,3 +41,9 @@ Can work well at full strength for making images look cleaner.
 Applies AdaIN to the target V tensor but only on reference channels with high variance.
 
 This makes the image even cleaner and further enhances the transfer style.
+
+## `key_subspace_alignment`
+
+Projects the target K tensor onto the reference K direction.
+
+It's really effective at intensifying style transfer at low strength values (~0.1). 
