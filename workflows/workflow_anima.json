@@ -317,67 +317,6 @@
       ]
     },
     {
-      "id": 603,
-      "type": "RFInversion",
-      "pos": [
-        812.2907721832939,
-        1175.3247940381746
-      ],
-      "size": [
-        273.3614812972471,
-        240.5904011287812
-      ],
-      "flags": {},
-      "order": 19,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 1549
-        },
-        {
-          "name": "reference_latent",
-          "type": "LATENT",
-          "link": 1526
-        },
-        {
-          "name": "ref_conditioning",
-          "type": "CONDITIONING",
-          "link": 1535
-        }
-      ],
-      "outputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "links": [
-            1554
-          ]
-        },
-        {
-          "name": "rf_inversion",
-          "type": "LATENT",
-          "links": [
-            1555
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "untwistingrope",
-        "ver": "c9136fcced444ea84778a25a37a2b45371ea06a5",
-        "Node name for S&R": "RFInversion"
-      },
-      "widgets_values": [
-        "rf_gamma_rk2",
-        0.5,
-        2,
-        1,
-        0.5,
-        false
-      ]
-    },
-    {
       "id": 624,
       "type": "VAELoader",
       "pos": [
@@ -1032,11 +971,11 @@
       "type": "UnofficialExtensions",
       "pos": [
         736.8516248256913,
-        767.4503476211383
+        739.6052727743137
       ],
       "size": [
         332.76171875,
-        178
+        202
       ],
       "flags": {},
       "order": 13,
@@ -1062,7 +1001,69 @@
         1,
         0.5,
         1,
-        1
+        1,
+        0.2
+      ]
+    },
+    {
+      "id": 603,
+      "type": "RFInversion",
+      "pos": [
+        812.2907721832939,
+        1175.3247940381746
+      ],
+      "size": [
+        273.3614812972471,
+        240.5904011287812
+      ],
+      "flags": {},
+      "order": 19,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 1549
+        },
+        {
+          "name": "reference_latent",
+          "type": "LATENT",
+          "link": 1526
+        },
+        {
+          "name": "ref_conditioning",
+          "type": "CONDITIONING",
+          "link": 1535
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "links": [
+            1554
+          ]
+        },
+        {
+          "name": "rf_inversion",
+          "type": "LATENT",
+          "links": [
+            1555
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "untwistingrope",
+        "ver": "c9136fcced444ea84778a25a37a2b45371ea06a5",
+        "Node name for S&R": "RFInversion"
+      },
+      "widgets_values": [
+        "gnri",
+        0.5,
+        1,
+        1,
+        0,
+        false
       ]
     }
   ],
@@ -1272,10 +1273,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.8140274938684695,
+      "scale": 0.6115909044841994,
       "offset": [
-        -401.60919568028396,
-        -554.686724023902
+        -195.25007235177566,
+        -490.7847054903549
       ]
     },
     "frontendVersion": "1.44.19",
