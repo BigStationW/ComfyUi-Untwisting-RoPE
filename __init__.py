@@ -742,8 +742,39 @@ def _sigma_from_timestep(timestep: torch.Tensor) -> float:
         return max(0.0, min(1.0, val / 1000.0))
     raise RuntimeError(f'Sigma conversion failed: unsupported timestep value {val!r}.')
 
-def _sigma_to_progress(timestep: torch.Tensor) -> float:
-    return max(0.0, min(1.0, 1.0 - _sigma_from_timestep(timestep)))
+def _sigma_to_progress(timestep: torch.Tensor, sampler_sigmas: List[float]) -> float:
+    sigma = _sigma_from_timestep(timestep)
+
+    if sampler_sigmas is None:
+        raise RuntimeError('Progress conversion failed: sampler_sigmas is missing.')
+
+    active: List[float] = []
+    for idx, s in enumerate(sampler_sigmas):
+        try:
+            sf = float(s)
+        except Exception as exc:
+            raise RuntimeError(
+                f'Progress conversion failed: sampler sigma at index {idx} is not numeric: {s!r}.'
+            ) from exc
+        if not math.isfinite(sf):
+            raise RuntimeError(
+                f'Progress conversion failed: sampler sigma at index {idx} is not finite: {s!r}.'
+            )
+        active.append(max(0.0, min(1.0, sf)))
+
+    # The sampler schedule normally contains a terminal sigma=0 endpoint, but
+    # the model is not evaluated there. Progress must span only real model calls
+    # so *_end values are reached on the last denoising call.
+    while active and active[-1] <= 1e-8:
+        active.pop()
+
+    if len(active) < 2:
+        raise RuntimeError(
+            'Progress conversion failed: sampler_sigmas did not contain at least two active model-call sigmas.'
+        )
+
+    idx = min(range(len(active)), key=lambda i: abs(active[i] - sigma))
+    return max(0.0, min(1.0, idx / max(1, len(active) - 1)))
 
 def _lerp(a: float, b: float, t: float) -> float:
     return float(a + (b - a) * t)
@@ -2702,7 +2733,7 @@ class UntwistingRoPE:
             _maybe_install_untwist_attention_override(to)
 
             sigma = _sigma_from_timestep(timestep)
-            progress = _sigma_to_progress(timestep)
+            progress = _sigma_to_progress(timestep, list(rf_state['sampler_sigmas']))
             target_b = int(input_x.shape[0])
 
             cfg: Dict[str, Any] = {
