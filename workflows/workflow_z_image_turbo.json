@@ -887,6 +887,45 @@
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
+      "id": 628,
+      "type": "UnofficialExtensions",
+      "pos": [
+        734.9158575574896,
+        680.1149980106868
+      ],
+      "size": [
+        332.76171875,
+        202
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "unofficial_extensions",
+          "type": "UNTWISTING_ROPE_EXTENSIONS",
+          "links": [
+            1554
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "untwistingrope",
+        "ver": "ec08050c160633dc890972120598e2912ce26870",
+        "Node name for S&R": "UnofficialExtensions"
+      },
+      "widgets_values": [
+        0.5,
+        "match_axes",
+        1,
+        0.5,
+        1,
+        1,
+        0.1
+      ]
+    },
+    {
       "id": 623,
       "type": "UntwistingRoPE",
       "pos": [
@@ -938,48 +977,10 @@
         1,
         0,
         1,
-        1.6,
+        1.4,
         0.5,
         "0-999",
         true
-      ]
-    },
-    {
-      "id": 628,
-      "type": "UnofficialExtensions",
-      "pos": [
-        734.9158575574896,
-        680.1149980106868
-      ],
-      "size": [
-        332.76171875,
-        178
-      ],
-      "flags": {},
-      "order": 12,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "unofficial_extensions",
-          "type": "UNTWISTING_ROPE_EXTENSIONS",
-          "links": [
-            1554
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "untwistingrope",
-        "ver": "ec08050c160633dc890972120598e2912ce26870",
-        "Node name for S&R": "UnofficialExtensions"
-      },
-      "widgets_values": [
-        0.5,
-        "match_axes",
-        1,
-        0.5,
-        1,
-        1
       ]
     }
   ],
@@ -1189,10 +1190,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.6115909044841512,
+      "scale": 0.5559917313492284,
       "offset": [
-        -401.3595562713144,
-        -368.90477217124817
+        -294.2068115995236,
+        -509.89822017891294
       ]
     },
     "frontendVersion": "1.44.19",
