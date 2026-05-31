@@ -2413,7 +2413,7 @@ class UnofficialExtensions:
                     'default': 0.0,
                     'min': 0.0,
                     'max': 1.0,
-                    'step': 0.05,
+                    'step': 0.01,
                     'tooltip': 'Only aligned target/reference V tokens receive reference injection.',
                 }),
                 'attention_entropy_scaling': ('FLOAT', {
