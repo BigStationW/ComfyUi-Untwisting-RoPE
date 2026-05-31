@@ -156,7 +156,7 @@ def _velocity_from_pred(
 # RF utility helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_GAMMA_RF_MODES = {'rf_gamma', 'rf_gamma_rk2'}
+_GAMMA_RF_MODES = {'rf_gamma', 'rf_gamma_rk2', 'gnri'}
 
 def _coerce_gamma_curve(value: Any = 0.0) -> float:
     """Clamp gamma_curve to the supported range."""
@@ -359,7 +359,7 @@ def _rf_build_cache_from_sampler_sigmas(
     """
     norm_strength = _coerce_norm_strength(norm_strength)
     mode, gamma_curve = _normalize_rf_mode_and_gamma_curve(rf_mode, gamma_curve)
-    valid_modes = {'linear', 'rf_gamma', 'rf_gamma_rk2', 'fireflow'}
+    valid_modes = {'linear', 'rf_gamma', 'rf_gamma_rk2', 'fireflow', 'gnri'}
     if mode not in valid_modes:
         raise ValueError(
             f"Invalid rf_mode={mode!r}. Expected one of {sorted(valid_modes)}."
@@ -479,6 +479,26 @@ def _rf_build_cache_from_sampler_sigmas(
         if mode == 'linear':
             z = _rf_linear_target(ref_clean, eps, sigma_cur)
             extra = 'linear_target'
+
+        elif mode == 'gnri':
+            # Official-style GNRI single-pass mode.
+            # With a single iteration, the official GNRI code returns the first
+            # detached candidate; no Newton refinement is re-evaluated by the model.
+            denom_prev = max(1.0 - sigma_prev, 1e-7)
+            v_model, ok, raw_preview = _call_model_as_velocity(z.detach(), sigma_prev, ' gnri')
+            vm_abs = float(v_model.detach().abs().mean().item())
+
+            v_prior = (eps - z.detach()) / denom_prev
+            vp_abs = float(v_prior.detach().abs().mean().item())
+            vp_sum += vp_abs
+
+            v_total = gamma_eff * v_model + (1.0 - gamma_eff) * v_prior
+            v_total = _apply_pmi_if_enabled(v_total)
+            z = (z.detach() + delta * v_total).detach()
+            _preview_once(step_i - 1, raw_preview, z)
+            extra = 'GNRI i=1'
+            if use_pmi:
+                extra += f'  PMI step={pmi_state.step_count}'
 
         elif mode == 'fireflow':
             # ── (Deng et al., ICML 2025) ─────────
@@ -2133,10 +2153,10 @@ class RFInversion:
                 'model': ('MODEL',),
                 'reference_latent': ('LATENT',),
                 'ref_conditioning': ('CONDITIONING',),
-                'rf_mode': (['linear', 'rf_gamma', 'rf_gamma_rk2', 'fireflow'], {
+                'rf_mode': (['linear', 'rf_gamma', 'rf_gamma_rk2', 'fireflow', 'gnri'], {
                     'default': 'rf_gamma',
                     'tooltip': (
-                        'Selects the ODE solver used to build the noisy reference trajectory: linear (no model calls -> random noise), rf_gamma (Euler), rf_gamma_rk2 (Runge-Kutta midpoint), or fireflow (FireFlow recurrence).'
+                        'Selects the ODE solver used to build the noisy reference trajectory: linear (no model calls -> random noise), rf_gamma (Euler), rf_gamma_rk2 (Runge-Kutta midpoint), fireflow (FireFlow recurrence), or gnri (single-pass guided Newton-Raphson inversion step).'
                     ),
                 }),
                 'gamma': ('FLOAT', {
@@ -2165,7 +2185,7 @@ class RFInversion:
                     'min': 0.0,
                     'max': 1.0,
                     'step': 0.05,
-                    'tooltip': 'PMI (Proximal-Mean Inversion) smooths out the velocity estimation by using a running mean across steps, 0 disables PMI.'
+                    'tooltip': 'PMI (Proximal-Mean Inversion) smooths out the velocity using a running mean across steps; 0 disables PMI. Applies to GNRI, RF gamma, RK2, and FireFlow.'
                 }),
                 'verbose': ('BOOLEAN', {
                     'default': False,
@@ -2701,7 +2721,8 @@ class UntwistingRoPE:
             vp._vprint(stats,
                 f'{vp._PREFIX} RF trajectory: mode={rf_mode}  gamma={gamma}  '
                 f'gamma_curve={gamma_curve:.3f}  '
-                f'norm_strength={norm_strength}  pmi_alpha={pmi_alpha}  seed={seed}'
+                f'norm_strength={norm_strength}  pmi_alpha={pmi_alpha}  '
+                f'seed={seed}'
             )
             vp._vprint(stats, f'{vp._PREFIX} RF schedule: captured from sampler at runtime; no SIGMAS input')
 
