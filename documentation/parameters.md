@@ -12,7 +12,7 @@ RF Inversion builds a noisy trajectory on the reference image, so the model sees
 | `gamma` | `0.50` | Blends weight between model velocity and prior velocity (0 = pure prior / straight path, 1 = pure model); only used by `rf_gamma` and `rf_gamma_rk2`. |
 | `gamma_curve` | `2.00` | Applies a bell-shaped schedule to `gamma` across the sigma range, concentrating model influence toward mid-noise levels; 0 disables the curve. |
 | `norm_strength` | `1.00` | After each RF step, blends the latent's mean/std towards the linear target to prevent feature drift; 0 = off, 1 = full correction. |
-| `pmi_alpha` | `0.50` | [PMI (Proximal-Mean Inversion)](https://arxiv.org/abs/2602.11850) smooths out the velocity estimation by using a running mean across steps, 0 disables PMI. |
+| `pmi_alpha` | `0.00` | [PMI (Proximal-Mean Inversion)](https://arxiv.org/abs/2602.11850) smooths out the velocity estimation by using a running mean across steps, 0 disables PMI. |
 
 ---
 
