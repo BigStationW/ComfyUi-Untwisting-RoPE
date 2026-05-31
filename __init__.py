@@ -1413,8 +1413,10 @@ def _apply_qkv_shared_effects(
         cfg['_debug_qk_adain_module'] = str(module_name)
         cfg['_debug_qk_adain_ranges'] = list(ranges)
 
-    # Shared key-subspace Gram-Schmidt alignment:
-    key_subspace = _coerce_strength01(cfg.get('key_subspace_alignment', 0.0))
+    # Shared key-subspace Gram-Schmidt alignment.
+    key_subspace_target = _coerce_strength01(cfg.get('key_subspace_alignment', 0.0))
+    key_subspace_progress = _coerce_strength01(cfg.get('progress', 1.0))
+    key_subspace = _lerp(0.0, key_subspace_target, key_subspace_progress)
     if key_subspace > 0.0:
         k_bshd = k_bshd.clone()
         for s, e in ranges:
@@ -1435,6 +1437,8 @@ def _apply_qkv_shared_effects(
             k_bshd[:target_bsz, s:e] = aligned.to(dtype=k_bshd.dtype)
 
         cfg['_debug_key_subspace_alignment_strength'] = float(key_subspace)
+        cfg['_debug_key_subspace_alignment_target'] = float(key_subspace_target)
+        cfg['_debug_key_subspace_alignment_progress'] = float(key_subspace_progress)
         cfg['_debug_key_subspace_alignment_module'] = str(module_name)
         cfg['_debug_key_subspace_alignment_ranges'] = list(ranges)
 
@@ -2495,7 +2499,7 @@ class UnofficialExtensions:
                     'step': 0.01,
                     'tooltip': (
                         'Projects target keys onto reference keys to restrict routing '
-                        'toward the reference key subspace.'
+                        'towards the reference key subspace.'
                     ),
                 }),
             },
