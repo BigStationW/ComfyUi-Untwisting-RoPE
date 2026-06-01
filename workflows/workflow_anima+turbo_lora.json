@@ -1065,7 +1065,7 @@
         "Node name for S&R": "RFInversion"
       },
       "widgets_values": [
-        "gnri",
+        "rf_gamma_rk2",
         0.5,
         1,
         1,
