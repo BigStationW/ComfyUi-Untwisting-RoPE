@@ -169,86 +169,6 @@ def _rf_scalar_fmt(value: Any, digits: int = 6) -> str:
     except Exception as exc:
         raise RuntimeError(f'{_RF_PREFIX} scalar formatting failed for value={value!r}: {exc}') from exc
 
-
-def _rf_mean_or_none(values: List[float]) -> Optional[float]:
-    return (sum(values) / len(values)) if values else None
-
-
-def _rf_print_step_quality(
-    stats: Optional[Any],
-    ref_clean: torch.Tensor,
-    eps: torch.Tensor,
-    z: torch.Tensor,
-    sigma_cur: float,
-    delta: float,
-    dz_abs: float,
-    path_prev_speed: Optional[float],
-) -> Optional[float]:
-    """Print cheap per-step RF trajectory diagnostics and return updated speed state.
-
-    This lives in verbose_prints.py on purpose: the RF builder should only own
-    trajectory construction, while diagnostic reductions/formatting stay here.
-    The function performs tensor reductions only; it does not call the model and
-    does not change sampling math.
-    """
-    if not _coerce_bool(getattr(stats, 'rf_verbose', False)):
-        return path_prev_speed
-
-    try:
-        with torch.no_grad():
-            sigma_f = max(0.0, min(1.0, float(sigma_cur)))
-            target_step = ((1.0 - sigma_f) * ref_clean.detach().float()) + (sigma_f * eps.detach().float())
-            z_step = z.detach().float()
-            diff_step = z_step - target_step
-
-            step_linear_mae = float(diff_step.abs().mean().item())
-            step_linear_rmse = float(diff_step.pow(2).mean().sqrt().item())
-
-            flat_z = z_step.flatten()
-            flat_t = target_step.flatten()
-            cos_denom = flat_z.norm() * flat_t.norm()
-            step_linear_cos = (
-                float(torch.dot(flat_z, flat_t).div(cos_denom).item())
-                if float(cos_denom.item()) > 1e-12 else float('nan')
-            )
-
-            step_speed = float(dz_abs) / max(abs(float(delta)), 1e-12)
-            step_rough = (
-                abs(step_speed - float(path_prev_speed))
-                if path_prev_speed is not None else 0.0
-            )
-
-            step_tail_ratio = float(z_step.abs().max().item()) / max(float(z_step.std().item()), 1e-12)
-
-            dims = tuple(range(1, z_step.ndim))
-            if dims:
-                z_step_mean = z_step.mean(dim=dims)
-                t_step_mean = target_step.mean(dim=dims)
-                step_mean_drift = float((z_step_mean - t_step_mean).abs().mean().item())
-
-                z_step_std = z_step.std(dim=dims, unbiased=False)
-                t_step_std = target_step.std(dim=dims, unbiased=False).clamp_min(1e-12)
-                step_std_ratio_drift = float((z_step_std / t_step_std - 1.0).abs().mean().item())
-            else:
-                step_mean_drift = abs(float(z_step.mean().item()) - float(target_step.mean().item()))
-                step_std_ratio_drift = 0.0
-    except Exception as exc:
-        raise RuntimeError(
-            f'{_rf_prefix(stats)} RF step quality diagnostic failed at σ={float(sigma_cur):.6f}; '
-            f'strict mode refuses to hide diagnostic failure: {exc}'
-        ) from exc
-
-    _rf_vprint(
-        stats,
-        f'{_rf_prefix(stats)}       step_quality '
-        f'speed={step_speed:.6f}  rough={step_rough:.6f}  '
-        f'linear_mae={step_linear_mae:.6f}  linear_rmse={step_linear_rmse:.6f}  '
-        f'linear_cos={step_linear_cos:.6f}  tail={step_tail_ratio:.6f}  '
-        f'mean_drift={step_mean_drift:.6f}  std_ratio_drift={step_std_ratio_drift:.6f}'
-    )
-    return step_speed
-
-
 def _rf_model_identity(model_patcher: Any) -> Dict[str, Any]:
     """Best-effort model identity diagnostics; never used for math decisions."""
     base = getattr(model_patcher, 'model', model_patcher)
@@ -326,88 +246,6 @@ def _rf_progress_snapshot(step_i: int, total_steps: int, start_time: float, pers
     end = '\n' if persistent or step_i >= total_steps else '\r'
     print(line, end=end, flush=True)
 
-
-def _rf_reset_active_tqdm_after_inversion(verbose_flag: Any = False) -> None:
-    """Best-effort reset of active tqdm sampler timers after a lazy RF build.
-
-    RF trajectory cache misses are currently built inside the first model call,
-    after Comfy's sampler progress bar has already started. Without resetting the
-    active tqdm timers, the sampler ETA includes RF inversion time and the first
-    denoising step appears much slower than it really is. This helper only
-    adjusts progress-bar timing state; it does not change sampling math.
-    """
-    tqdm_classes = []
-    try:
-        from tqdm import tqdm as _tqdm
-        tqdm_classes.append(_tqdm)
-    except Exception:
-        pass
-    try:
-        from tqdm.auto import tqdm as _auto_tqdm
-        tqdm_classes.append(_auto_tqdm)
-    except Exception:
-        pass
-    try:
-        from tqdm.std import tqdm as _std_tqdm
-        tqdm_classes.append(_std_tqdm)
-    except Exception:
-        pass
-
-    seen_classes = set()
-    instances = []
-    for cls in tqdm_classes:
-        cls_id = id(cls)
-        if cls_id in seen_classes:
-            continue
-        seen_classes.add(cls_id)
-        try:
-            instances.extend(list(getattr(cls, '_instances', []) or []))
-        except Exception:
-            continue
-
-    seen_bars = set()
-    reset_count = 0
-    now = time.time()
-
-    for pbar in instances:
-        bar_id = id(pbar)
-        if bar_id in seen_bars:
-            continue
-        seen_bars.add(bar_id)
-        try:
-            if getattr(pbar, 'disable', False):
-                continue
-
-            n = int(getattr(pbar, 'n', 0) or 0)
-            total = getattr(pbar, 'total', None)
-            if total is not None:
-                try:
-                    if n >= int(total):
-                        continue
-                except Exception:
-                    pass
-
-            # Prefer tqdm's own pause accounting when available. It shifts
-            # start_t forward by the time since the last print, preserving n.
-            unpause = getattr(pbar, 'unpause', None)
-            if callable(unpause):
-                unpause()
-            else:
-                try:
-                    pbar.start_t = now
-                    pbar.last_print_t = now
-                    pbar.last_print_n = n
-                except Exception:
-                    continue
-
-            try:
-                pbar.refresh()
-            except Exception:
-                pass
-            reset_count += 1
-        except Exception:
-            continue
-
 def _normalize_sigma_float(value: Any) -> Optional[float]:
     if torch.is_tensor(value):
         v = float(value.detach().float().mean().item())
@@ -463,27 +301,22 @@ def _rf_print_sampler_capture(verbose_flag: Any, found: Any, run_count: Any) -> 
         f'run={run_count}  seed=42'
     )
 
-
 def _rf_print_persistent_cache_hit(verbose_flag: Any, cache_key: str, built_cache: Any) -> None:
     if _coerce_bool(verbose_flag):
         print(f'{_RF_PREFIX}   RF persistent cache HIT key={str(cache_key)[:12]} cache_items={len(built_cache)}')
 
-
 def _rf_print_persistent_cache_miss(verbose_flag: Any, cache_key: str) -> None:
     if _coerce_bool(verbose_flag):
         print(f'{_RF_PREFIX}   RF persistent cache MISS key={str(cache_key)[:12]} → building now')
-
 
 def _rf_print_direct_fallback(verbose_flag: Any, sigma: float) -> None:
     raise RuntimeError(
         f'{_RF_PREFIX} No sampler sigmas captured; direct one-step RF path is disabled for σ={float(sigma):.6f}'
     )
 
-
 def _rf_print_traceback(verbose_flag: Any, trace_text: str) -> None:
     if _coerce_bool(verbose_flag) and trace_text:
         print(trace_text)
-
 
 def _rf_print_prepared(
     verbose_flag: Any,
@@ -512,7 +345,6 @@ def _rf_print_prepared(
     _rf_print_model_identity(f'{_RF_PREFIX}   RFInversion', model_info)
     print(f'{_RF_PREFIX} ═══════════════════════════════════════\n')
 
-
 def _untwist_format_scale_value(value: Any) -> str:
     """Format one scale value for compact debug logs without noisy trailing zeros."""
     value_f = float(value)
@@ -520,7 +352,6 @@ def _untwist_format_scale_value(value: Any) -> str:
         raise ValueError(f'Invalid RoPE scale value {value!r}: not finite.')
     text = f'{value_f:.6f}'.rstrip('0').rstrip('.')
     return text if text else '0'
-
 
 def _untwist_scale_range(values: Any) -> str:
     """Return a compact [first ... last] summary from a 1D scale tensor/list."""
@@ -535,7 +366,6 @@ def _untwist_scale_range(values: Any) -> str:
     first = _untwist_format_scale_value(float(flat[0].item()))
     last = _untwist_format_scale_value(float(flat[-1].item()))
     return f'[{first} ... {last}]'
-
 
 _AXIS0_ROPE_MODES = {'default', 'match_axes', 'constant'}
 
@@ -574,7 +404,6 @@ def _untwist_coerce_axis0_rope_scale(value: Any, default: float = 0.0) -> float:
     if value_f < 0.0:
         raise ValueError(f'Invalid axis0_rope_scale={value_f!r}; expected non-negative value.')
     return value_f
-
 
 def _untwist_print_rope_scale_debug(
     stats: Optional[_RuntimeStats],
@@ -627,7 +456,6 @@ def _untwist_print_rope_scale_debug(
         print(f'{_PREFIX}   axis1+={_untwist_scale_range(axis1_plus)}')
     except Exception as exc:
         raise RuntimeError(f'{_PREFIX} RoPE scale debug print failed; strict mode refuses to hide debug failure: {exc}') from exc
-
 
 def _untwist_print_rope_scale_debug_from_cfg(
     stats: Optional[_RuntimeStats],
@@ -711,7 +539,6 @@ __all__ = [
     '_rf_step_iterator',
     '_rf_format_duration',
     '_rf_progress_snapshot',
-    '_rf_reset_active_tqdm_after_inversion',
     '_normalize_sigma_float',
     '_coerce_sigma_sequence',
     '_rf_print_sampler_capture',

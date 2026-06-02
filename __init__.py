@@ -1755,6 +1755,12 @@ class UntwistingRoPE:
                     ref = _repeat_to_batch(ref_clean, target_b)
 
                     if not rf_state.get('schedule_built', False) and rf_state.get('sampler_sigmas', None) is not None:
+                        if not bool(rf_state.get('preflight_model_call_active', False)):
+                            raise RuntimeError(
+                                'UntwistingRoPE failed: RF cache was not prebuilt before denoising. '
+                                'Use the MODEL output from RFInversion so its SAMPLER_SAMPLE preflight '
+                                'can build the RF trajectory before Comfy starts the denoising tqdm.'
+                            )
                         effective_ref_conditioning, adapter_ref_status = _prepare_reference_conditioning_for_adapter(
                             adapter, ref_conditioning, dm, input_x.device,
                             c.get('c_crossattn').dtype if torch.is_tensor(c.get('c_crossattn', None)) else input_x.dtype,
@@ -1783,8 +1789,6 @@ class UntwistingRoPE:
                             debug_store=debug_store,
                             parameterization=stats.parameterization,
                         )
-                        if not persistent_hit:
-                            vp._rf_reset_active_tqdm_after_inversion(getattr(stats, 'rf_verbose', False))
                         ref_mode = 'RF sampler-sigma trajectory (persistent-cache hit)' if persistent_hit else 'RF sampler-sigma trajectory (built)'
                         stats.rf_sigma_cache = rf_state['cache']
                         stats.rf_eps = rf_state['eps']

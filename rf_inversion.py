@@ -950,6 +950,96 @@ def _append_conditioning_status(mode: str, status: str) -> str:
     if status and status != 'not-applicable':
         return f'{mode};{status}'
     return mode
+
+
+def _rf_prebuild_cache_with_sampler_model_call(
+    *,
+    model_wrap: Any,
+    sigmas: Any,
+    extra_args: Any,
+    noise: Any,
+    state: Dict[str, Any],
+    debug_store: Dict[str, Any],
+    verbose_flag: bool,
+) -> bool:
+    """Run one sampler-model preflight call before Comfy starts k-diffusion tqdm.
+
+    Comfy's SAMPLER_SAMPLE wrapper is entered before KSAMPLER.sample creates the
+    k-diffusion tqdm loop. The RF cache builder normally needs the exact model
+    wrapper call context, so this preflight asks the final sampler model wrapper
+    for one prediction at the first sigma and discards it. That triggers the
+    existing model_function_wrapper cache build early, without mutating any
+    global tqdm instances and without changing sampler math.
+    """
+    if not isinstance(state, dict):
+        return False
+    if bool(state.get('schedule_built', False)):
+        return False
+    if bool(state.get('preflight_model_call_active', False)):
+        return False
+    if not torch.is_tensor(noise):
+        raise RuntimeError('RF prebuild failed: sampler noise is not a tensor.')
+
+    run_count = int(state.get('run_count', 0))
+    if state.get('preflight_done_run', None) == run_count:
+        return False
+
+    found = state.get('sampler_sigmas', None)
+    if found is None:
+        found = vp._coerce_sigma_sequence(sigmas)
+    if found is None:
+        raise RuntimeError('RF prebuild failed: sampler sigmas are missing.')
+    if len(found) < 1:
+        raise RuntimeError('RF prebuild failed: sampler sigma schedule is empty.')
+
+    # Use the raw first sampler sigma for the dummy model call, not the normalized
+    # [0, 1] copy stored for RF cache keys. Comfy's model wrapper should see the
+    # same sigma scale it will receive inside the sampler loop.
+    try:
+        if torch.is_tensor(sigmas):
+            raw_sigma0 = float(sigmas.detach().float().flatten()[0].item())
+        elif isinstance(sigmas, (list, tuple)):
+            first = sigmas[0]
+            raw_sigma0 = float(first.detach().float().flatten()[0].item()) if torch.is_tensor(first) else float(first)
+        else:
+            raw_sigma0 = float(found[0])
+    except Exception as exc:
+        raise RuntimeError('RF prebuild failed: invalid first sampler sigma.') from exc
+    if not math.isfinite(raw_sigma0):
+        raise RuntimeError(f'RF prebuild failed: first sampler sigma is not finite: {raw_sigma0!r}.')
+
+    x0 = noise.detach()
+    sigma_tensor = torch.full((int(x0.shape[0]),), raw_sigma0, device=x0.device, dtype=x0.dtype)
+
+    model_options = {}
+    seed = None
+    if isinstance(extra_args, dict):
+        mo = extra_args.get('model_options', {})
+        model_options = mo if isinstance(mo, dict) else {}
+        seed = extra_args.get('seed', None)
+
+    state['preflight_model_call_active'] = True
+    state['preflight_done_run'] = run_count
+    debug_store['preflight_model_call_active'] = True
+    debug_store['preflight_done_run'] = run_count
+    try:
+        if vp._coerce_bool(verbose_flag):
+            print(f'{vp._RF_PREFIX} RF prebuild: warming cache before sampler tqdm run={run_count}')
+        with torch.no_grad():
+            model_wrap(x0, sigma_tensor, model_options=model_options, seed=seed)
+    except Exception as exc:
+        state['last_error'] = repr(exc)
+        debug_store['last_error'] = repr(exc)
+        raise RuntimeError('RF prebuild failed during the pre-sampler model call.') from exc
+    finally:
+        state['preflight_model_call_active'] = False
+        debug_store['preflight_model_call_active'] = False
+
+    if not bool(state.get('schedule_built', False)):
+        raise RuntimeError(
+            'RF prebuild completed a sampler-model call, but the RF trajectory cache was not built.'
+        )
+    return True
 class RFInversion:
     CATEGORY = 'model_patches/Untwisting RoPE'
     RETURN_TYPES = ('MODEL', 'LATENT')
@@ -1112,6 +1202,8 @@ class RFInversion:
                 state['eps'] = None
                 state['run_count'] = int(state.get('run_count', 0)) + 1
                 state['preview_callback'] = _rf_make_preview_callback(model_clone, max(1, len(found) - 1))
+                state['preflight_done_run'] = None
+                state['preflight_model_call_active'] = False
 
                 rf_latent['untwist_rf_cache'] = state['cache']
                 rf_latent['untwist_rf_sigmas'] = list(found)
@@ -1124,7 +1216,22 @@ class RFInversion:
                 debug_store['persistent_cache_key'] = None
                 debug_store['persistent_cache_hit'] = False
                 debug_store['parameterization'] = rf_latent.get('untwist_rf_parameterization', 'unknown')
+                debug_store['preflight_done_run'] = None
+                debug_store['preflight_model_call_active'] = False
                 vp._rf_print_sampler_capture(verbose_flag, found, state["run_count"])
+
+                # Build the RF trajectory before Comfy enters KSAMPLER.sample's
+                # k-diffusion tqdm loop. This keeps denoising elapsed/ETA from
+                # including RF inversion time, without touching global tqdm state.
+                _rf_prebuild_cache_with_sampler_model_call(
+                    model_wrap=model_wrap,
+                    sigmas=sigmas,
+                    extra_args=extra_args,
+                    noise=noise,
+                    state=state,
+                    debug_store=debug_store,
+                    verbose_flag=verbose_flag,
+                )
             return executor(model_wrap, sigmas, extra_args, callback, noise, latent_image, denoise_mask, disable_pbar)
 
         model_clone.model_options = _clone_model_options(model_clone.model_options)
@@ -1135,11 +1242,11 @@ class RFInversion:
             is_model_options=True,
         )
 
-        # RFInversion must be able to run by itself. The original code only
-        # captured sampler sigmas here; the trajectory was built later inside
-        # UntwistingRoPE.patch, which is architecture-specific. This wrapper
-        # builds the RF cache during the normal sampler model calls and then
-        # returns the original model prediction unchanged.
+        # RFInversion must be able to run by itself. The SAMPLER_SAMPLE wrapper
+        # above preflights one model call before Comfy's k-diffusion tqdm starts,
+        # so this wrapper usually only verifies/cache-looks-up during denoising.
+        # It keeps a strict lazy fallback for unusual sampler paths that bypass
+        # the normal SAMPLER_SAMPLE preflight.
         old_model_function_wrapper = model_clone.model_options.get('model_function_wrapper', None)
         rf_runtime_stats = vp._RuntimeStats(verbose=False, rf_verbose=verbose_flag)
         rf_runtime_stats.rf_prefix = vp._RF_PREFIX
@@ -1171,7 +1278,17 @@ class RFInversion:
                 sampler_sigmas = state.get('sampler_sigmas', None)
 
                 # Build the full sampler-grid RF trajectory once per sampler run.
+                # In normal Comfy sampler paths this branch runs only during the
+                # pre-sampler preflight call, before k-diffusion creates tqdm.
+                # Refuse to build during real denoising because that would make
+                # the denoising tqdm count RF inversion time as step-1 time.
                 if not state.get('schedule_built', False) and sampler_sigmas is not None:
+                    if not bool(state.get('preflight_model_call_active', False)):
+                        raise RuntimeError(
+                            'RFInversion failed: RF cache was not prebuilt before denoising. '
+                            'The SAMPLER_SAMPLE preflight did not run; refusing to build inside '
+                            'the first denoising model call because it pollutes Comfy tqdm timing.'
+                        )
                     effective_ref_conditioning, adapter_ref_status = _prepare_reference_conditioning_for_adapter(
                         adapter, ref_conditioning, dm_for_ref, input_x.device,
                         c.get('c_crossattn').dtype if torch.is_tensor(c.get('c_crossattn', None)) else input_x.dtype,
@@ -1202,8 +1319,6 @@ class RFInversion:
                         debug_store=debug_store,
                         parameterization=detected_param,
                     )
-                    if not _persistent_hit:
-                        vp._rf_reset_active_tqdm_after_inversion(verbose_flag)
                     debug_store['apply_model_output'] = cfg['apply_model_output']
                     debug_store['model_info'] = model_info
 
