@@ -1234,7 +1234,7 @@
         "aux_id": "BigStationW/ComfyUi-Untwisting-RoPE"
       },
       "widgets_values": [
-        "rf_gamma_rk2",
+        "fireflow",
         0.5,
         1,
         1,
