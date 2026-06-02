@@ -326,6 +326,88 @@ def _rf_progress_snapshot(step_i: int, total_steps: int, start_time: float, pers
     end = '\n' if persistent or step_i >= total_steps else '\r'
     print(line, end=end, flush=True)
 
+
+def _rf_reset_active_tqdm_after_inversion(verbose_flag: Any = False) -> None:
+    """Best-effort reset of active tqdm sampler timers after a lazy RF build.
+
+    RF trajectory cache misses are currently built inside the first model call,
+    after Comfy's sampler progress bar has already started. Without resetting the
+    active tqdm timers, the sampler ETA includes RF inversion time and the first
+    denoising step appears much slower than it really is. This helper only
+    adjusts progress-bar timing state; it does not change sampling math.
+    """
+    tqdm_classes = []
+    try:
+        from tqdm import tqdm as _tqdm
+        tqdm_classes.append(_tqdm)
+    except Exception:
+        pass
+    try:
+        from tqdm.auto import tqdm as _auto_tqdm
+        tqdm_classes.append(_auto_tqdm)
+    except Exception:
+        pass
+    try:
+        from tqdm.std import tqdm as _std_tqdm
+        tqdm_classes.append(_std_tqdm)
+    except Exception:
+        pass
+
+    seen_classes = set()
+    instances = []
+    for cls in tqdm_classes:
+        cls_id = id(cls)
+        if cls_id in seen_classes:
+            continue
+        seen_classes.add(cls_id)
+        try:
+            instances.extend(list(getattr(cls, '_instances', []) or []))
+        except Exception:
+            continue
+
+    seen_bars = set()
+    reset_count = 0
+    now = time.time()
+
+    for pbar in instances:
+        bar_id = id(pbar)
+        if bar_id in seen_bars:
+            continue
+        seen_bars.add(bar_id)
+        try:
+            if getattr(pbar, 'disable', False):
+                continue
+
+            n = int(getattr(pbar, 'n', 0) or 0)
+            total = getattr(pbar, 'total', None)
+            if total is not None:
+                try:
+                    if n >= int(total):
+                        continue
+                except Exception:
+                    pass
+
+            # Prefer tqdm's own pause accounting when available. It shifts
+            # start_t forward by the time since the last print, preserving n.
+            unpause = getattr(pbar, 'unpause', None)
+            if callable(unpause):
+                unpause()
+            else:
+                try:
+                    pbar.start_t = now
+                    pbar.last_print_t = now
+                    pbar.last_print_n = n
+                except Exception:
+                    continue
+
+            try:
+                pbar.refresh()
+            except Exception:
+                pass
+            reset_count += 1
+        except Exception:
+            continue
+
 def _normalize_sigma_float(value: Any) -> Optional[float]:
     if torch.is_tensor(value):
         v = float(value.detach().float().mean().item())
@@ -629,6 +711,7 @@ __all__ = [
     '_rf_step_iterator',
     '_rf_format_duration',
     '_rf_progress_snapshot',
+    '_rf_reset_active_tqdm_after_inversion',
     '_normalize_sigma_float',
     '_coerce_sigma_sequence',
     '_rf_print_sampler_capture',

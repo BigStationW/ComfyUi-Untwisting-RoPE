@@ -1783,6 +1783,8 @@ class UntwistingRoPE:
                             debug_store=debug_store,
                             parameterization=stats.parameterization,
                         )
+                        if not persistent_hit:
+                            vp._rf_reset_active_tqdm_after_inversion(getattr(stats, 'rf_verbose', False))
                         ref_mode = 'RF sampler-sigma trajectory (persistent-cache hit)' if persistent_hit else 'RF sampler-sigma trajectory (built)'
                         stats.rf_sigma_cache = rf_state['cache']
                         stats.rf_eps = rf_state['eps']

@@ -104,31 +104,20 @@ def _coerce_unit_interval(value: Any, default: float = 0.0) -> float:
     return max(0.0, min(1.0, v))
 
 def _rf_trajectory_config_for_cache(rf_cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Return the RF parameters that affect the trajectory/cache.
-
-    This intentionally lives in rf_inversion.py. Adding a new RF trajectory
-    parameter should only require placing it in untwist_rf_config and adding it
-    to _rf_build_cache_from_sampler_sigmas when the builder needs it. The cache
-    key will include it automatically unless the key is explicitly marked as
-    non-trajectory metadata here.
-    """
-    cfg = dict(rf_cfg or {})
-    for key in list(cfg.keys()):
-        if key in _RF_CONFIG_NON_TRAJECTORY_KEYS or str(key).startswith('_'):
-            cfg.pop(key, None)
-
+    """Return the RF parameters that affect the trajectory/cache."""
+    src = dict(rf_cfg or {})
     mode, gamma_curve = _normalize_rf_mode_and_gamma_curve(
-        cfg.get('rf_mode', 'rf_gamma'),
-        cfg.get('gamma_curve', 0.0),
+        src.get('rf_mode', 'rf_gamma'),
+        src.get('gamma_curve', 0.0),
     )
-    cfg['rf_mode'] = mode
-    cfg['gamma_curve'] = float(gamma_curve)
-    cfg['gamma'] = float(cfg.get('gamma', 0.5))
-    cfg['norm_strength'] = _coerce_norm_strength(cfg.get('norm_strength', 0.0))
-    cfg['pmi_alpha'] = _coerce_unit_interval(cfg.get('pmi_alpha', 0.4), 0.4)
-    cfg['seed'] = int(cfg.get('seed', 42))
-    return cfg
+    return {
+        'rf_mode': mode,
+        'gamma_curve': float(gamma_curve),
+        'gamma': float(src.get('gamma', 0.5)),
+        'norm_strength': _coerce_norm_strength(src.get('norm_strength', 0.0)),
+        'pmi_alpha': _coerce_unit_interval(src.get('pmi_alpha', 0.4), 0.4),
+        'seed': int(src.get('seed', 42)),
+    }
 
 def _rf_build_kwargs_from_config(rf_cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """
@@ -386,6 +375,8 @@ def _rf_match_mean_std(x: torch.Tensor, target: torch.Tensor, strength: float = 
     matched = (x - x_mean) / x_std * t_std + t_mean
     return (1.0 - strength) * x + strength * matched
 
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # PMI — Proximal-Mean Inversion (Wang et al., ICLR 2026)
 # "Free Lunch for Stabilizing Rectified Flow Inversion"
@@ -557,6 +548,7 @@ def _rf_build_cache_from_sampler_sigmas(
     pmi_alpha_eff = max(0.0, min(1.0, float(pmi_alpha)))
     use_pmi = pmi_alpha_eff > 0.0
     pmi_state = _PMIState()
+
     total_preview_steps = max(1, len(sigmas) - 1)
     previewed_steps: set = set()
 
@@ -633,6 +625,7 @@ def _rf_build_cache_from_sampler_sigmas(
                 post_update_corrected=post_update_corrected,
             )
 
+
         if mode == 'linear':
             z = _rf_linear_target(ref_clean, eps, sigma_cur)
             extra = 'linear_target'
@@ -702,7 +695,7 @@ def _rf_build_cache_from_sampler_sigmas(
                 vp_sum += vp_abs_target
 
                 z_solver_next = gamma_eff * z_model_next + (1.0 - gamma_eff) * z_prior_next
-                if use_pmi and abs(delta) > 1e-12:
+                if abs(delta) > 1e-12:
                     v_total = (z_solver_next - z) / delta
                     v_total = _apply_pmi_if_enabled(v_total, sigma_cur, post_update_corrected=True)
                     z = z + delta * v_total
@@ -744,10 +737,12 @@ def _rf_build_cache_from_sampler_sigmas(
                 if use_pmi:
                     extra = f'PMI step={pmi_state.step_count}'
 
+
         if norm_strength > 0.0:
             target = _rf_linear_target(ref_clean, eps, sigma_cur)
             z = _rf_match_mean_std(z, target, strength=norm_strength)
             extra = (extra + '  ' if extra else '') + f'norm={norm_strength:.2f}'
+
 
         prev  = sigma_cur
         z_mean = float(z.mean().item())
@@ -1207,6 +1202,8 @@ class RFInversion:
                         debug_store=debug_store,
                         parameterization=detected_param,
                     )
+                    if not _persistent_hit:
+                        vp._rf_reset_active_tqdm_after_inversion(verbose_flag)
                     debug_store['apply_model_output'] = cfg['apply_model_output']
                     debug_store['model_info'] = model_info
 
