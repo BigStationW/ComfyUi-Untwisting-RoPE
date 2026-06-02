@@ -1058,7 +1058,7 @@
         "Node name for S&R": "RFInversion"
       },
       "widgets_values": [
-        "rf_gamma_rk2",
+        "fireflow",
         0.5,
         1,
         1,
