@@ -1708,7 +1708,6 @@ class UntwistingRoPE:
             sigma = _sigma_from_timestep(timestep)
             progress = _sigma_to_progress(timestep, list(rf_state['sampler_sigmas']))
             target_b = int(input_x.shape[0])
-            is_preflight_call = bool(rf_state.get('preflight_model_call_active', False))
 
             cfg: Dict[str, Any] = {
                 'enabled': True,
@@ -1731,7 +1730,7 @@ class UntwistingRoPE:
                 'progress': progress,
                 'sigma': sigma,
                 'wrapper_call': call_n,
-                '_rope_scale_debug_printed': is_preflight_call,
+                '_rope_scale_debug_printed': False,
             }
             default_cfg = getattr(adapter, 'default_runtime_cfg', None)
             if not callable(default_cfg):
@@ -1749,10 +1748,7 @@ class UntwistingRoPE:
             rf_cache_hit = False
             rf_cond_mode = 'not-connected'
             ref_mode = 'target-only'
-            should_print = (
-                vp._coerce_bool(getattr(stats, 'verbose', False))
-                and not is_preflight_call
-            )
+            should_print = vp._coerce_bool(getattr(stats, 'verbose', False))
 
             if rf_active and torch.is_tensor(ref_clean_cpu):
                 try:
@@ -1760,12 +1756,6 @@ class UntwistingRoPE:
                     ref = _repeat_to_batch(ref_clean, target_b)
 
                     if not rf_state.get('schedule_built', False) and rf_state.get('sampler_sigmas', None) is not None:
-                        if not bool(rf_state.get('preflight_model_call_active', False)):
-                            raise RuntimeError(
-                                'UntwistingRoPE failed: RF cache was not prebuilt before denoising. '
-                                'Use the MODEL output from RFInversion so its SAMPLER_SAMPLE preflight '
-                                'can build the RF trajectory before Comfy starts the denoising tqdm.'
-                            )
                         effective_ref_conditioning, adapter_ref_status = _prepare_reference_conditioning_for_adapter(
                             adapter, ref_conditioning, dm, input_x.device,
                             c.get('c_crossattn').dtype if torch.is_tensor(c.get('c_crossattn', None)) else input_x.dtype,
