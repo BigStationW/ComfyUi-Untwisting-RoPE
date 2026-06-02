@@ -156,7 +156,7 @@ def _velocity_from_pred(
 # RF utility helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_GAMMA_RF_MODES = {'rf_gamma', 'rf_gamma_rk2', 'fireflow'}
+_GAMMA_RF_MODES = {'rf_gamma', 'rf_gamma_rk2', 'fireflow', 'rf_solver_2'}
 
 def _coerce_gamma_curve(value: Any = 0.0) -> float:
     """Clamp gamma_curve to the supported range."""
@@ -384,7 +384,7 @@ def _rf_build_cache_from_sampler_sigmas(
     """
     norm_strength = _coerce_norm_strength(norm_strength)
     mode, gamma_curve = _normalize_rf_mode_and_gamma_curve(rf_mode, gamma_curve)
-    valid_modes = {'linear', 'rf_gamma', 'rf_gamma_rk2', 'fireflow'}
+    valid_modes = {'linear', 'rf_gamma', 'rf_gamma_rk2', 'fireflow', 'rf_solver_2'}
     if mode not in valid_modes:
         raise ValueError(
             f"Invalid rf_mode={mode!r}. Expected one of {sorted(valid_modes)}."
@@ -565,7 +565,41 @@ def _rf_build_cache_from_sampler_sigmas(
             vp_abs  = float(v_prior.abs().mean().item())
             vp_sum += vp_abs
 
-            if mode == 'rf_gamma_rk2':
+            if mode == 'rf_solver_2':
+                # ── RF-Solver-2 second-order Taylor step ───────────────
+                z_mid = z + 0.5 * delta * v_model
+                sigma_mid = sigma_prev + 0.5 * delta
+                v_model_mid, ok_mid, raw_preview_mid = _call_model_as_velocity(z_mid, sigma_mid, ' rf_solver_2 mid')
+                vm_abs_mid = float(v_model_mid.abs().mean().item())
+
+                half_delta = 0.5 * delta
+                if abs(half_delta) > 1e-12:
+                    first_order = (v_model_mid - v_model) / half_delta
+                    z_model_next = z + delta * v_model + 0.5 * (delta ** 2) * first_order
+                else:
+                    z_model_next = z.detach().clone()
+
+                z_prior_next = _rf_linear_target(ref_clean, eps, sigma_cur)
+                vp_abs_target = float((z_prior_next - z).abs().mean().item() / max(abs(delta), 1e-12))
+                vp_sum += vp_abs_target
+
+                z_solver_next = gamma_eff * z_model_next + (1.0 - gamma_eff) * z_prior_next
+                if use_pmi and abs(delta) > 1e-12:
+                    v_total = (z_solver_next - z) / delta
+                    v_total = _apply_pmi_if_enabled(v_total, sigma_cur, post_update_corrected=True)
+                    z = z + delta * v_total
+                else:
+                    z = z_solver_next
+
+                _preview_once(step_i - 1, raw_preview_mid, z)
+                extra = (
+                    f'RF-Solver-2 exact  |v_model_mid|={vm_abs_mid:.5f}  '
+                    f'|prior_target|={vp_abs_target:.5f}'
+                )
+                if use_pmi:
+                    extra += f'  PMI step={pmi_state.step_count}'
+
+            elif mode == 'rf_gamma_rk2':
                 v1    = gamma_eff * v_model + (1.0 - gamma_eff) * v_prior
                 z_mid = z + 0.5 * delta * v1
                 sigma_mid = sigma_prev + 0.5 * delta
@@ -2192,10 +2226,10 @@ class RFInversion:
                 'model': ('MODEL',),
                 'reference_latent': ('LATENT',),
                 'ref_conditioning': ('CONDITIONING',),
-                'rf_mode': (['linear', 'rf_gamma', 'rf_gamma_rk2', 'fireflow'], {
+                'rf_mode': (['linear', 'rf_gamma', 'rf_gamma_rk2', 'rf_solver_2', 'fireflow'], {
                     'default': 'rf_gamma',
                     'tooltip': (
-                        'Selects the ODE solver used to build the noisy reference trajectory: linear (no model calls -> random noise), rf_gamma (Euler), rf_gamma_rk2 (Runge-Kutta midpoint), or fireflow (FireFlow midpoint recurrence).'
+                        'Selects the ODE solver used to build the noisy reference trajectory.'
                     ),
                 }),
                 'gamma': ('FLOAT', {
@@ -2203,7 +2237,7 @@ class RFInversion:
                     'min': 0.0,
                     'max': 1.0,
                     'step': 0.01,
-                    'tooltip': 'Blends weight between model velocity and prior velocity (0 = pure prior / straight path, 1 = pure model); used by rf_gamma, rf_gamma_rk2, and fireflow.'
+                    'tooltip': 'Blends weight between model velocity and prior velocity (0 = pure prior / straight path, 1 = pure model).'
                 }),
                 'gamma_curve': ('FLOAT', {
                     'default': 2.0,
