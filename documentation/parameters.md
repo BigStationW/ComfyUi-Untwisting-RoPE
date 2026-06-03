@@ -7,7 +7,7 @@ RF Inversion builds a noisy trajectory on the reference image, so the model sees
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `reference_latent` | — | The clean reference image latent that the inversion trajectory is built from. |
-| `ref_conditioning` | *(optional)* | Text conditioning associated with the reference image. In practice, it's better to put the target conditioning to it. |
+| `ref_conditioning` | — | Text conditioning associated with the reference image. In practice, it's better to put the target conditioning to it. |
 | `rf_mode` | `gnri` | Selects the ODE solver used to build the noisy reference trajectory: `linear` (no model calls -> random noise), `rf_gamma` (Euler), `rf_gamma_rk2` (Runge-Kutta midpoint),  `fireflow` [(FireFlow recurrence)](https://arxiv.org/abs/2412.07517) or `rf_solver_2` [(RF-Solver / RF-Edit)](https://arxiv.org/abs/2411.04746) |
 | `gamma` | `0.50` | Blends weight between model velocity and prior velocity (0 = pure prior / straight path, 1 = pure model). |
 | `gamma_curve` | `2.00` | Applies a bell-shaped schedule to `gamma` across the sigma range, concentrating model influence toward mid-noise levels; 0 disables the curve. |
