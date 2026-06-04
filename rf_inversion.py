@@ -7,7 +7,9 @@ import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
+import comfy.model_management
 import comfy.patcher_extension
+import comfy.utils
 import latent_preview
 
 from . import verbose_prints as vp
@@ -292,8 +294,130 @@ def _rf_ensure_trajectory_cache(
     return built_cache, eps, list(sorted_sigmas), cache_key, bool(persistent_hit)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Parameterization auto-detection
+# Raw transformer velocity path
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _rf_comfy_convert_tensor(extra: Any, dtype: torch.dtype, device: torch.device) -> Any:
+    """Mirror ComfyUI model_base.convert_tensor for raw model calls."""
+    if hasattr(extra, "dtype"):
+        if extra.dtype != torch.int and extra.dtype != torch.long:
+            extra = comfy.model_management.cast_to_device(extra, device, dtype)
+        else:
+            extra = comfy.model_management.cast_to_device(extra, device, None)
+    return extra
+
+def _rf_validate_raw_velocity_model(base_model: Any) -> None:
+    model_type = getattr(base_model, 'model_type', None)
+    model_type_name = str(getattr(model_type, 'name', model_type))
+    if model_type_name not in {'FLOW', 'FLUX'}:
+        raise RuntimeError(
+            'RFInversion raw-velocity mode only supports Comfy FLOW/FLUX models. '
+            f'Got model_type={model_type_name!r}. No x0/denoised fallback is enabled.'
+        )
+    if not hasattr(base_model, 'diffusion_model'):
+        raise RuntimeError('RFInversion raw-velocity mode failed: BaseModel.diffusion_model is missing.')
+    if not hasattr(base_model, 'model_sampling'):
+        raise RuntimeError('RFInversion raw-velocity mode failed: BaseModel.model_sampling is missing.')
+
+def _rf_raw_transformer_velocity(
+    apply_model: Callable,
+    x: torch.Tensor,
+    t: torch.Tensor,
+    c_concat: Optional[torch.Tensor] = None,
+    c_crossattn: Optional[torch.Tensor] = None,
+    control: Any = None,
+    transformer_options: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
+) -> torch.Tensor:
+    """
+    Strict raw-velocity equivalent of ComfyUI BaseModel._apply_model.
+    """
+    base_model = getattr(apply_model, '__self__', None)
+    if base_model is None:
+        raise RuntimeError(
+            'RFInversion raw-velocity mode requires a bound Comfy BaseModel.apply_model. '
+            'No x0/denoised fallback is enabled.'
+        )
+    _rf_validate_raw_velocity_model(base_model)
+
+    if not torch.is_tensor(x):
+        raise RuntimeError('RFInversion raw-velocity mode expected tensor input x.')
+    if not torch.is_tensor(t):
+        raise RuntimeError('RFInversion raw-velocity mode expected tensor timestep/sigma.')
+
+    sigma = t
+    xc = base_model.model_sampling.calculate_input(sigma, x)
+
+    if c_concat is not None:
+        xc = torch.cat(
+            [xc] + [comfy.model_management.cast_to_device(c_concat, xc.device, xc.dtype)],
+            dim=1,
+        )
+
+    context = c_crossattn
+    dtype = base_model.get_dtype_inference()
+
+    xc = xc.to(dtype)
+    device = xc.device
+    t_model = base_model.model_sampling.timestep(t).float()
+    if context is not None:
+        context = comfy.model_management.cast_to_device(context, device, dtype)
+
+    extra_conds: Dict[str, Any] = {}
+    for name, extra in kwargs.items():
+        if hasattr(extra, 'dtype'):
+            extra = _rf_comfy_convert_tensor(extra, dtype, device)
+        elif isinstance(extra, list):
+            extra = [_rf_comfy_convert_tensor(item, dtype, device) for item in extra]
+        extra_conds[name] = extra
+
+    t_model = base_model.process_timestep(t_model, x=x, **extra_conds)
+    if 'latent_shapes' in extra_conds:
+        xc = comfy.utils.unpack_latents(xc, extra_conds.pop('latent_shapes'))
+
+    transformer_options = (transformer_options or {}).copy()
+    transformer_options['prefetch_dynamic_vbars'] = (
+        base_model.current_patcher is not None and base_model.current_patcher.is_dynamic()
+    )
+
+    model_output = base_model.diffusion_model(
+        xc,
+        t_model,
+        context=context,
+        control=control,
+        transformer_options=transformer_options,
+        **extra_conds,
+    )
+    if len(model_output) > 1 and not torch.is_tensor(model_output):
+        model_output, _ = comfy.utils.pack_latents(model_output)
+    if not torch.is_tensor(model_output):
+        raise RuntimeError(
+            'RFInversion raw-velocity mode expected diffusion_model to return a tensor after packing.'
+        )
+    return model_output.float()
+
+def _make_raw_velocity_apply_model_fn(apply_model: Callable) -> Callable:
+    """Return an apply_model-shaped callable that yields raw FLOW/FLUX velocity only."""
+    def raw_velocity_apply_model(
+        x: torch.Tensor,
+        t: torch.Tensor,
+        c_concat: Optional[torch.Tensor] = None,
+        c_crossattn: Optional[torch.Tensor] = None,
+        control: Any = None,
+        transformer_options: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> torch.Tensor:
+        return _rf_raw_transformer_velocity(
+            apply_model,
+            x,
+            t,
+            c_concat=c_concat,
+            c_crossattn=c_crossattn,
+            control=control,
+            transformer_options=transformer_options,
+            **kwargs,
+        )
+    return raw_velocity_apply_model
 
 def _velocity_from_pred(
     x_sigma: torch.Tensor,
@@ -301,23 +425,31 @@ def _velocity_from_pred(
     sigma: float,
     parameterization: str,
 ) -> torch.Tensor:
+    """Accept raw transformer velocity only."""
+    mode = str(parameterization or '').lower()
+    if mode not in ('raw_velocity', 'velocity_raw', 'model_velocity'):
+        raise RuntimeError(
+            'RFInversion expected raw transformer velocity but received '
+            f'parameterization={parameterization!r}. No x0/denoised fallback is enabled.'
+        )
+    if not torch.is_tensor(pred):
+        raise RuntimeError('RFInversion raw-velocity mode received a non-tensor model output.')
+    return pred.float()
+
+
+def _flow_denoised_preview_from_raw_velocity(
+    x_sigma: torch.Tensor,
+    raw_velocity: torch.Tensor,
+    sigma: float,
+) -> torch.Tensor:
     """
-    Convert ComfyUI ``model.apply_model`` output into the RF velocity dx/dsigma.
-
-    ComfyUI's model_function_wrapper receives ``model.apply_model``. In current
-    ComfyUI, BaseModel._apply_model returns ``model_sampling.calculate_denoised``;
-    for supported rectified-flow models this is a denoised/x0-style tensor, not the raw transformer
-    velocity. Therefore RF inversion must recover velocity from x_sigma and x0.
-
-    Only the explicit opt-in label ``raw_velocity`` is treated as already being
-    a velocity. RFInversion itself does not set that label.
+    Recreate Comfy's FLOW/FLUX denoised/x0 value for preview only.
     """
-    mode = str(parameterization or 'x0').lower()
-    if mode in ('raw_velocity', 'velocity_raw', 'model_velocity'):
-        return pred
-
-    sigma_f = max(float(sigma), 1e-7)
-    return (x_sigma - pred) / sigma_f
+    if not torch.is_tensor(x_sigma) or not torch.is_tensor(raw_velocity):
+        raise RuntimeError('RF preview conversion requires tensor x_sigma and raw_velocity.')
+    sigma_t = torch.as_tensor(float(sigma), device=x_sigma.device, dtype=raw_velocity.dtype)
+    sigma_t = sigma_t.reshape((1,) * raw_velocity.ndim)
+    return x_sigma.to(dtype=raw_velocity.dtype) - raw_velocity * sigma_t
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # RF utility helpers
@@ -561,14 +693,14 @@ def _rf_build_cache_from_sampler_sigmas(
     total_preview_steps = max(1, len(sigmas) - 1)
     previewed_steps: set = set()
 
-    def _preview_once(step_index: int, raw_pred: Optional[torch.Tensor], x_current: Optional[torch.Tensor]) -> None:
-        if preview_callback is None or raw_pred is None:
+    def _preview_once(step_index: int, denoised_preview: Optional[torch.Tensor], x_current: Optional[torch.Tensor]) -> None:
+        if preview_callback is None or not torch.is_tensor(denoised_preview):
             return
         step_index = max(0, min(total_preview_steps - 1, int(step_index)))
         if step_index in previewed_steps:
             return
         previewed_steps.add(step_index)
-        _rf_emit_preview(preview_callback, step_index, raw_pred, x_current, total_preview_steps)
+        _rf_emit_preview(preview_callback, step_index, denoised_preview, x_current, total_preview_steps)
 
     vp._rf_vprint(stats,
         f'{vp._rf_prefix(stats)}   RF trajectory mode: {mode}  gamma={gamma:.4f}  '
@@ -615,8 +747,9 @@ def _rf_build_cache_from_sampler_sigmas(
 
             model_ok += 1
             v = _velocity_from_pred(z_in, raw, sigma_val, parameterization)
+            denoised_preview = _flow_denoised_preview_from_raw_velocity(z_in, v, sigma_val)
             vm_sum += float(v.abs().mean().item())
-            return v, True, raw
+            return v, True, denoised_preview
 
         def _apply_pmi_if_enabled(
             v: torch.Tensor,
@@ -710,7 +843,6 @@ def _rf_build_cache_from_sampler_sigmas(
                     z = z + delta * v_total
                 else:
                     z = z_solver_next
-
                 _preview_once(step_i - 1, raw_preview_mid, z)
                 extra = (
                     f'RF-Solver-2 exact  |v_model_mid|={vm_abs_mid:.5f}  '
@@ -751,7 +883,6 @@ def _rf_build_cache_from_sampler_sigmas(
             target = _rf_linear_target(ref_clean, eps, sigma_cur)
             z = _rf_match_mean_std(z, target, strength=norm_strength)
             extra = (extra + '  ' if extra else '') + f'norm={norm_strength:.2f}'
-
 
         prev  = sigma_cur
         z_mean = float(z.mean().item())
@@ -943,7 +1074,7 @@ def _rf_new_debug_store() -> Dict[str, Any]:
         'persistent_cache_key': None,
         'persistent_cache_hit': False,
         'parameterization': 'unknown',
-        'apply_model_output': 'comfy_denoised_x0',
+        'apply_model_output': 'raw_transformer_velocity',
         'model_info': {},
         'wrapper_calls': 0,
         'last_sigma': None,
@@ -954,7 +1085,7 @@ def _rf_new_debug_store() -> Dict[str, Any]:
     return debug_store
 
 def _rf_make_preview_callback(model_for_preview: Any, total_steps: int) -> Optional[Callable[[int, torch.Tensor, torch.Tensor, int], None]]:
-    """Create a ComfyUI-style latent preview callback for RF raw predictions."""
+    """Create a ComfyUI-style latent preview callback for the RF trajectory."""
     total_steps = max(1, int(total_steps))
     try:
         return latent_preview.prepare_callback(model_for_preview, total_steps)
@@ -964,17 +1095,17 @@ def _rf_make_preview_callback(model_for_preview: Any, total_steps: int) -> Optio
 def _rf_emit_preview(
     callback: Optional[Callable[[int, torch.Tensor, torch.Tensor, int], None]],
     step: int,
-    raw_pred: Optional[torch.Tensor],
+    denoised_preview: Optional[torch.Tensor],
     x_current: Optional[torch.Tensor],
     total_steps: int,
 ) -> None:
-    """Emit one RF raw-pred preview frame."""
+    """Emit one RF denoised/x0 prediction preview frame."""
     if callback is None:
         raise RuntimeError('RF preview failed: callback is missing.')
-    if not torch.is_tensor(raw_pred):
-        raise RuntimeError('RF preview failed: raw_pred is not a tensor.')
+    if not torch.is_tensor(denoised_preview):
+        raise RuntimeError('RF preview failed: denoised_preview is not a tensor.')
     try:
-        preview_latent = raw_pred[:1].detach()
+        preview_latent = denoised_preview[:1].detach()
         current = x_current[:1].detach() if torch.is_tensor(x_current) else preview_latent
         callback(int(step), preview_latent, current, int(total_steps))
     except Exception as exc:
@@ -1082,12 +1213,9 @@ class RFInversion:
         ref_clean = reference_latent['samples'].detach().clone()
         ref_clean = model.model.process_latent_in(ref_clean)
 
-        # model_function_wrapper is passed ComfyUI model.apply_model, which returns
-        # the denoised/x0-style prediction after model_sampling.calculate_denoised.
-        # Keep the raw model type only as diagnostics; RF velocity conversion uses x0.
         model_info = vp._rf_model_identity(model)
         adapter = _select_model_adapter(model, model_info)
-        detected_param = 'x0'
+        detected_param = 'raw_velocity'
         dm_for_ref = None
         try:
             dm_for_ref = _safe_get_diffusion_model(model, adapter)
@@ -1104,7 +1232,7 @@ class RFInversion:
             'pmi_alpha': float(pmi_alpha),
             'seed': 42,
             'verbose': verbose_flag,
-            'apply_model_output': 'comfy_denoised_x0',
+            'apply_model_output': 'raw_transformer_velocity',
             'model_info': model_info,
         }
         state: Dict[str, Any] = {
@@ -1293,7 +1421,7 @@ class RFInversion:
                         sampler_sigmas=list(sampler_sigmas),
                         target_b=target_b,
                         rf_cond_mode=rf_cond_mode,
-                        apply_model_fn=apply_model,
+                        apply_model_fn=_make_raw_velocity_apply_model_fn(apply_model),
                         base_model_kwargs=rf_kwargs,
                         device=input_x.device,
                         dtype=input_x.dtype,

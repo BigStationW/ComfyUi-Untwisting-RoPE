@@ -1782,7 +1782,7 @@ class UntwistingRoPE:
                             sampler_sigmas=sampler_sigmas,
                             target_b=target_b,
                             rf_cond_mode=rf_cond_mode,
-                            apply_model_fn=apply_model,
+                            apply_model_fn=_make_raw_velocity_apply_model_fn(apply_model),
                             base_model_kwargs=rf_kwargs,
                             device=input_x.device,
                             dtype=input_x.dtype,
@@ -1913,6 +1913,7 @@ from .rf_inversion import (
     _rf_latent_get_config,
     _rf_make_preview_callback,
     _rf_new_debug_store,
+    _make_raw_velocity_apply_model_fn,
     _sigma_from_timestep,
     _sigma_to_progress,
 )
