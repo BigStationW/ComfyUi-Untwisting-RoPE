@@ -96,29 +96,6 @@
       ]
     },
     {
-      "id": 616,
-      "type": "Note",
-      "pos": [
-        1472.1181965831133,
-        1506.4408653175178
-      ],
-      "size": [
-        303.65604311050856,
-        116.00450279158758
-      ],
-      "flags": {},
-      "order": 0,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [],
-      "properties": {},
-      "widgets_values": [
-        "I strongly recommend using only ancestral samplers, adding noise during the process really helps eliminate some transfer style artifacts."
-      ],
-      "color": "#c09430",
-      "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
       "id": 229,
       "type": "KSamplerSelect",
       "pos": [
@@ -130,7 +107,7 @@
         58
       ],
       "flags": {},
-      "order": 1,
+      "order": 0,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -163,7 +140,7 @@
         82
       ],
       "flags": {},
-      "order": 2,
+      "order": 1,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -197,7 +174,7 @@
         116.00450279158758
       ],
       "flags": {},
-      "order": 3,
+      "order": 2,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -353,7 +330,7 @@
         112.57343506692268
       ],
       "flags": {},
-      "order": 4,
+      "order": 3,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -477,7 +454,7 @@
         126.58960944919556
       ],
       "flags": {},
-      "order": 5,
+      "order": 4,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -571,7 +548,7 @@
         314.00000000000006
       ],
       "flags": {},
-      "order": 6,
+      "order": 5,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -714,7 +691,7 @@
         112.57343506692268
       ],
       "flags": {},
-      "order": 7,
+      "order": 6,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -765,64 +742,6 @@
       ]
     },
     {
-      "id": 623,
-      "type": "UntwistingRoPE",
-      "pos": [
-        1136.956054943152,
-        1171.7011951213472
-      ],
-      "size": [
-        270,
-        270
-      ],
-      "flags": {},
-      "order": 25,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 1549
-        },
-        {
-          "name": "rf_inversion",
-          "type": "LATENT",
-          "link": 1550
-        },
-        {
-          "name": "unofficial_extensions",
-          "shape": 7,
-          "type": "UNTWISTING_ROPE_EXTENSIONS",
-          "link": 1568
-        }
-      ],
-      "outputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "links": [
-            1551,
-            1552
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "untwistingrope",
-        "ver": "9fb6a19e82077dc54ddb120f202d474d01497cf7",
-        "Node name for S&R": "UntwistingRoPE"
-      },
-      "widgets_values": [
-        25,
-        0.95,
-        0,
-        1,
-        4,
-        0.5,
-        "0-999",
-        true
-      ]
-    },
-    {
       "id": 634,
       "type": "Note",
       "pos": [
@@ -834,7 +753,7 @@
         112.57343506692268
       ],
       "flags": {},
-      "order": 8,
+      "order": 7,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -922,7 +841,7 @@
         314.0000000000001
       ],
       "flags": {},
-      "order": 9,
+      "order": 8,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1002,7 +921,7 @@
         111.67533752711438
       ],
       "flags": {},
-      "order": 10,
+      "order": 9,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -1025,7 +944,7 @@
         102.39426790580865
       ],
       "flags": {},
-      "order": 11,
+      "order": 10,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1059,7 +978,7 @@
         106
       ],
       "flags": {},
-      "order": 12,
+      "order": 11,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1095,7 +1014,7 @@
         58
       ],
       "flags": {},
-      "order": 13,
+      "order": 12,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1130,7 +1049,7 @@
         112.57343506692268
       ],
       "flags": {},
-      "order": 14,
+      "order": 13,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -1153,7 +1072,7 @@
         202
       ],
       "flags": {},
-      "order": 15,
+      "order": 14,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1178,6 +1097,87 @@
         1,
         1,
         0.1
+      ]
+    },
+    {
+      "id": 616,
+      "type": "Note",
+      "pos": [
+        1472.1181965831133,
+        1506.4408653175178
+      ],
+      "size": [
+        303.65604311050856,
+        116.00450279158758
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "I strongly recommend using only SDE samplers like er_sde or euler_ancestral, adding noise during the process really helps eliminate some transfer style artifacts."
+      ],
+      "color": "#c09430",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 623,
+      "type": "UntwistingRoPE",
+      "pos": [
+        1136.956054943152,
+        1171.7011951213472
+      ],
+      "size": [
+        270,
+        270
+      ],
+      "flags": {},
+      "order": 25,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 1549
+        },
+        {
+          "name": "rf_inversion",
+          "type": "LATENT",
+          "link": 1550
+        },
+        {
+          "name": "unofficial_extensions",
+          "shape": 7,
+          "type": "UNTWISTING_ROPE_EXTENSIONS",
+          "link": 1568
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "links": [
+            1551,
+            1552
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "untwistingrope",
+        "ver": "9fb6a19e82077dc54ddb120f202d474d01497cf7",
+        "Node name for S&R": "UntwistingRoPE"
+      },
+      "widgets_values": [
+        2.5,
+        1,
+        0,
+        1,
+        1.4,
+        0.5,
+        "0-999",
+        true
       ]
     },
     {
@@ -1236,8 +1236,8 @@
       "widgets_values": [
         "rf_solver_2",
         0.5,
-        1,
-        1,
+        0,
+        0.5,
         0,
         false
       ]
@@ -1505,10 +1505,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.5559917313492311,
+      "scale": 0.41772481694157115,
       "offset": [
-        -230.32440399806657,
-        -439.0547763337038
+        81.67739060246757,
+        -243.55338168607318
       ]
     },
     "frontendVersion": "1.44.19",
