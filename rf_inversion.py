@@ -634,6 +634,52 @@ def _rf_linear_target(ref_clean: torch.Tensor, eps: torch.Tensor, sigma: float) 
     sigma = max(0.0, min(1.0, float(sigma)))
     return (1.0 - sigma) * ref_clean + sigma * eps
 
+
+def _flowturbo_pc_internal_sigmas(sigmas: List[float]) -> List[float]:
+    """Build a deterministic FlowTurbo-style pseudo-corrector subgrid.
+    Pseudo-corrector Heun reuses the endpoint model evaluation from the
+    previous interval as the next interval's start velocity. With ``n`` sampler
+    intervals, Endpoint-Heun costs ``2*n`` model calls. This helper creates
+    ``2*n - 1`` internal intervals so pseudo-corrector uses the same budget:
+    one initial model call plus one endpoint call per internal interval.
+    """
+    clean: List[float] = []
+    for s in sigmas or []:
+        try:
+            sf = max(0.0, min(1.0, float(s)))
+        except Exception:
+            continue
+        if not clean or abs(sf - clean[-1]) > 1e-8:
+            clean.append(sf)
+    clean = sorted(clean)
+    if len(clean) <= 2:
+        return clean
+
+    intervals = []
+    for i in range(len(clean) - 1):
+        a, b = clean[i], clean[i + 1]
+        d = b - a
+        if d > 1e-8:
+            intervals.append((d, i, a, b))
+
+    extra_count = max(0, min(len(intervals) - 1, len(clean) - 2))
+    split_indices = {i for _, i, _, _ in sorted(intervals, reverse=True)[:extra_count]}
+
+    grid: List[float] = [clean[0]]
+    for i in range(len(clean) - 1):
+        a, b = clean[i], clean[i + 1]
+        if i in split_indices:
+            mid = 0.5 * (a + b)
+            if mid - grid[-1] > 1e-8 and b - mid > 1e-8:
+                grid.append(mid)
+        grid.append(b)
+
+    out: List[float] = []
+    for s in grid:
+        if not out or abs(float(s) - out[-1]) > 1e-8:
+            out.append(float(s))
+    return out
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # PMI — Proximal-Mean Inversion (Wang et al., ICLR 2026)
 # "Free Lunch for Stabilizing Rectified Flow Inversion"
@@ -748,7 +794,7 @@ def _rf_build_cache_from_sampler_sigmas(
     Build reference x_sigma latents on the actual sampler sigma grid.
     """
     mode = str(rf_mode or 'rf_gamma')
-    valid_modes = {'linear', 'rf_gamma', 'rf_gamma_rk2', 'rf_solver_2', 'endpoint_heun', 'fireflow'}
+    valid_modes = {'linear', 'rf_gamma', 'rf_gamma_rk2', 'rf_solver_2', 'endpoint_heun', 'fireflow', 'flowturbo_pc'}
     if mode not in valid_modes:
         raise ValueError(
             f"Invalid rf_mode={mode!r}. Expected one of {sorted(valid_modes)}."
@@ -841,6 +887,211 @@ def _rf_build_cache_from_sampler_sigmas(
 
     # RF step quality diagnostics.
     path_prev_speed: Optional[float] = None
+
+    def _call_model_as_velocity_shared(z_in, sigma_val, label=''):
+        nonlocal model_ok, vm_sum
+        t_tensor = torch.full((z_in.shape[0],), sigma_val, device=device, dtype=dtype)
+        with torch.no_grad():
+            try:
+                raw = apply_model_fn(z_in, t_tensor, **base_model_kwargs)
+            except Exception as exc:
+                raise RuntimeError(
+                    f'RF trajectory build failed during model call at σ={sigma_val:.6f} '
+                    f'mode={mode}{label}.'
+                ) from exc
+
+        model_ok += 1
+        v = _velocity_from_pred(z_in, raw, sigma_val, parameterization)
+        denoised_preview = _flow_denoised_preview_from_raw_velocity(z_in, v, sigma_val)
+        vm_sum += float(v.abs().mean().item())
+        return v, True, denoised_preview
+
+    def _apply_pmi_with_delta_if_enabled(
+        v: torch.Tensor,
+        delta_t: float,
+        pmi_time: float,
+        *,
+        post_update_corrected: bool = False,
+    ) -> torch.Tensor:
+        if not use_pmi:
+            return v
+        return pmi_state.update_and_correct(
+            v,
+            delta_t=delta_t,
+            t_next=pmi_time,
+            strength=pmi_alpha_eff,
+            post_update_corrected=post_update_corrected,
+        )
+
+    if base_mode == 'flowturbo_pc':
+        # FlowTurbo-style pseudo-corrector Heun.
+        # Internal substeps are integrated silently; verbose logs/progress are
+        # emitted only when an original sampler sigma endpoint is reached.
+        internal_sigmas = _flowturbo_pc_internal_sigmas(sigmas)
+        internal_total_steps = max(1, len(internal_sigmas) - 1)
+        original_sigma_keys = {round(float(sv), 6) for sv in sigmas}
+        cached_macro_steps = 0
+        macro_total_steps = max(1, len(sigmas) - 1)
+
+        vp._rf_vprint(stats,
+            f'{vp._rf_prefix(stats)}   FlowTurbo-PC internal grid: '
+            f'sampler_steps={len(sigmas)-1}  internal_steps={internal_total_steps}  '
+            f'target_model_evals={internal_total_steps + 1}  logging=grid_endpoints'
+        )
+
+        v_start_model, ok_start, raw_preview_start = _call_model_as_velocity_shared(
+            z, internal_sigmas[0], ' flowturbo_pc start'
+        )
+        vm_abs = float(v_start_model.abs().mean().item())
+
+        macro_prev_sigma = float(sigmas[0])
+        macro_prev_z = z.detach().clone()
+        macro_vm_sum = 0.0
+        macro_vp_sum = 0.0
+        macro_internal_count = 0
+        macro_first_internal_sigma = float(internal_sigmas[0])
+        macro_last_vm_start = vm_abs
+        macro_last_vm_end = vm_abs
+        macro_last_otip_extra = ''
+
+        # Keep the integration subgrid hidden, but drive the usual RF progress
+        # iterator once per original sampler-grid endpoint.
+        macro_progress_iter = iter(vp._rf_step_iterator(macro_total_steps))
+        for internal_index in range(internal_total_steps):
+            step_i = int(internal_index) + 1
+            sigma_prev = float(internal_sigmas[step_i - 1])
+            sigma_cur = float(internal_sigmas[step_i])
+            delta = float(sigma_cur - sigma_prev)
+            gamma_eff = _rf_gamma_for_mode(mode, gamma, sigma_prev, sigma_cur)
+            otip_extra = ''
+            otip_schedule_index = max(0, internal_total_steps - step_i)
+
+            # Pseudo-corrector predictor: use the reusable start velocity.
+            z_pred_next = z + delta * v_start_model
+            v_model_end, ok_end, raw_preview_end = _call_model_as_velocity_shared(
+                z_pred_next, sigma_cur, ' flowturbo_pc pseudo_end'
+            )
+            vm_abs_start = float(v_start_model.abs().mean().item())
+            vm_abs_end = float(v_model_end.abs().mean().item())
+
+            # Model-only Heun/trapezoid update first.
+            z_model_next = z + 0.5 * delta * (v_start_model + v_model_end)
+            z_prior_next = _rf_linear_target(ref_clean, eps, sigma_cur)
+            vp_abs_target = float((z_prior_next - z).abs().mean().item() / max(abs(delta), 1e-12))
+            vp_sum += vp_abs_target
+
+            z_solver_next = gamma_eff * z_model_next + (1.0 - gamma_eff) * z_prior_next
+            if abs(delta) > 1e-12:
+                v_total = (z_solver_next - z) / delta
+                if use_otip:
+                    v_total, ot_strength, ot_abs = _otip_apply_velocity_guidance(
+                        v_total, z, eps, sigma_prev, otip_schedule_index, internal_total_steps,
+                        otip_strength_eff, otip_phase_eff, otip_clip_norm_eff,
+                        respect_model_norm=otip_respect_model_norm_eff,
+                    )
+                    otip_extra = f'  OTIP λ={ot_strength:.4f} |ot|={ot_abs:.5f}'
+                v_total = _apply_pmi_with_delta_if_enabled(
+                    v_total, delta, sigma_cur, post_update_corrected=True
+                )
+                z = z + delta * v_total
+            else:
+                z = z_solver_next
+
+            # Reuse the endpoint model evaluation as the next start velocity.
+            v_start_model = v_model_end.detach().clone()
+            vm_abs = vm_abs_end
+
+            macro_internal_count += 1
+            macro_vm_sum += 0.5 * (vm_abs_start + vm_abs_end)
+            macro_vp_sum += vp_abs_target
+            macro_last_vm_start = vm_abs_start
+            macro_last_vm_end = vm_abs_end
+            macro_last_otip_extra = otip_extra
+
+            sigma_key = round(sigma_cur, 6)
+            cache_hit_endpoint = sigma_key in original_sigma_keys
+            if cache_hit_endpoint:
+                cache[sigma_key] = z.detach().clone()
+                macro_step_i = cached_macro_steps + 1
+                _preview_once(cached_macro_steps, raw_preview_end, z)
+
+                z_mean = float(z.mean().item())
+                z_std = float(z.std().item())
+                z_min = float(z.min().item())
+                z_max = float(z.max().item())
+                macro_delta = float(sigma_cur - macro_prev_sigma)
+                macro_dz_abs = float((z - macro_prev_z).abs().mean().item())
+                macro_model_abs = macro_vm_sum / max(1, macro_internal_count)
+                macro_prior_abs = macro_vp_sum / max(1, macro_internal_count)
+
+                extra = (
+                    f'FlowTurbo-PC reuse  substeps={macro_internal_count}  '
+                    f'|v_start|={macro_last_vm_start:.5f}  '
+                    f'|v_end|={macro_last_vm_end:.5f}  '
+                    f'|prior_avg|={macro_prior_abs:.5f}'
+                )
+                if macro_last_otip_extra:
+                    extra += macro_last_otip_extra
+                if use_pmi:
+                    extra += f'  PMI step={pmi_state.step_count}'
+
+                try:
+                    next(macro_progress_iter)
+                except StopIteration:
+                    pass
+
+                vp._rf_vprint(stats,
+                    f'{vp._rf_prefix(stats)}     z_sigma step {macro_step_i:02d}/{macro_total_steps}: '
+                    f'mode={mode}  γ_eff={gamma_eff:.4f}  '
+                    f'σ_prev={macro_prev_sigma:.6f} -> σ={sigma_cur:.6f}  Δσ={macro_delta:.6f}  '
+                    f'|model|={macro_model_abs:.5f}  |prior|={macro_prior_abs:.5f}  '
+                    f'|Δz|={macro_dz_abs:.5f}  {extra}\n'
+                    f'{vp._rf_prefix(stats)}       z_σ mean={z_mean:.4f}  std={z_std:.4f}  '
+                    f'min={z_min:.4f}  max={z_max:.4f}'
+                )
+                path_prev_speed = vp._rf_print_step_quality(
+                    stats,
+                    ref_clean=ref_clean,
+                    eps=eps,
+                    z=z,
+                    sigma_cur=sigma_cur,
+                    delta=macro_delta,
+                    dz_abs=macro_dz_abs,
+                    path_prev_speed=path_prev_speed,
+                )
+                vp._rf_progress_snapshot(
+                    macro_step_i,
+                    macro_total_steps,
+                    rf_progress_start_time,
+                    persistent=vp._coerce_bool(getattr(stats, 'rf_verbose', False)),
+                )
+
+                cached_macro_steps += 1
+                macro_prev_sigma = sigma_cur
+                macro_prev_z = z.detach().clone()
+                macro_vm_sum = 0.0
+                macro_vp_sum = 0.0
+                macro_internal_count = 0
+                macro_first_internal_sigma = sigma_cur
+                macro_last_otip_extra = ''
+
+        # Ensure every original sampler endpoint has an exact cache entry.
+        missing_keys = [round(float(sv), 6) for sv in sigmas if round(float(sv), 6) not in cache]
+        if missing_keys:
+            raise RuntimeError(
+                f'FlowTurbo-PC trajectory build failed: missing original sampler cache keys {missing_keys}.'
+            )
+
+        steps = max(1, len(sigmas) - 1)
+        vp._rf_vprint(stats,
+            f'{vp._rf_prefix(stats)}   RF schedule build: mode={mode}  sampler_sigmas={len(sampler_sigmas)}  '
+            f'unique={len(sigmas)}  rf_steps={len(sigmas)-1}  internal_steps={internal_total_steps}  '
+            f'model_ok={model_ok}  failures={failures}\n'
+            f'{vp._rf_prefix(stats)}     sigma_range=[{sigmas[0]:.6f}, {sigmas[-1]:.6f}]  '
+            f'|model|={vm_sum/max(1, model_ok):.5f}  |prior|={vp_sum/max(1, internal_total_steps):.5f}  '
+            f'z_final std={z.std().item():.4f}  parameterization={parameterization}'
+        )
+        return cache, eps, sigmas
 
     for step_index in vp._rf_step_iterator(rf_total_steps):
         step_i = int(step_index) + 1
@@ -1347,7 +1598,7 @@ class RFInversion:
                 'model': ('MODEL',),
                 'reference_latent': ('LATENT',),
                 'ref_conditioning': ('CONDITIONING',),
-                'rf_mode': (['linear', 'rf_gamma', 'rf_gamma_rk2', 'rf_solver_2', 'endpoint_heun', 'fireflow'], {
+                'rf_mode': (['linear', 'rf_gamma', 'rf_gamma_rk2', 'rf_solver_2', 'endpoint_heun', 'fireflow', 'flowturbo_pc'], {
                     'default': 'rf_gamma',
                     'tooltip': (
                         'Selects the ODE solver used to build the noisy reference trajectory. '
