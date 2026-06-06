@@ -1061,45 +1061,6 @@
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 637,
-      "type": "UnofficialExtensions",
-      "pos": [
-        752.5144423306588,
-        744.8146642908163
-      ],
-      "size": [
-        332.76171875,
-        202
-      ],
-      "flags": {},
-      "order": 14,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "unofficial_extensions",
-          "type": "UNTWISTING_ROPE_EXTENSIONS",
-          "links": [
-            1568
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "untwistingrope",
-        "ver": "ec08050c160633dc890972120598e2912ce26870",
-        "Node name for S&R": "UnofficialExtensions"
-      },
-      "widgets_values": [
-        0.5,
-        "match_axes",
-        1,
-        0.5,
-        1,
-        1,
-        0.1
-      ]
-    },
-    {
       "id": 616,
       "type": "Note",
       "pos": [
@@ -1111,7 +1072,7 @@
         116.00450279158758
       ],
       "flags": {},
-      "order": 15,
+      "order": 14,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -1189,7 +1150,7 @@
       ],
       "size": [
         273.3614812972471,
-        240.5904011287812
+        266
       ],
       "flags": {},
       "order": 24,
@@ -1239,7 +1200,47 @@
         0,
         0.5,
         0,
+        false,
+        20,
         false
+      ]
+    },
+    {
+      "id": 637,
+      "type": "UnofficialExtensions",
+      "pos": [
+        752.5144423306588,
+        744.8146642908163
+      ],
+      "size": [
+        332.76171875,
+        202
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "unofficial_extensions",
+          "type": "UNTWISTING_ROPE_EXTENSIONS",
+          "links": [
+            1568
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "untwistingrope",
+        "ver": "ec08050c160633dc890972120598e2912ce26870",
+        "Node name for S&R": "UnofficialExtensions"
+      },
+      "widgets_values": [
+        0.5,
+        "match_axes",
+        1,
+        0.5,
+        1,
+        0.1
       ]
     }
   ],
@@ -1505,13 +1506,13 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.41772481694157115,
+      "scale": 0.5559917313492313,
       "offset": [
-        81.67739060246757,
-        -243.55338168607318
+        -205.27291999448627,
+        -403.69784963333586
       ]
     },
-    "frontendVersion": "1.44.19",
+    "frontendVersion": "1.45.15",
     "workflowRendererVersion": "LG",
     "VHS_latentpreview": false,
     "VHS_latentpreviewrate": 0,
