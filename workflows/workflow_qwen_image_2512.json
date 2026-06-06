@@ -888,70 +888,6 @@
       ]
     },
     {
-      "id": 603,
-      "type": "RFInversion",
-      "pos": [
-        812.2907721832939,
-        1175.3247940381746
-      ],
-      "size": [
-        273.3614812972471,
-        266
-      ],
-      "flags": {},
-      "order": 20,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 1556
-        },
-        {
-          "name": "reference_latent",
-          "type": "LATENT",
-          "link": 1526
-        },
-        {
-          "name": "ref_conditioning",
-          "type": "CONDITIONING",
-          "link": 1535
-        }
-      ],
-      "outputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "links": [
-            1549
-          ]
-        },
-        {
-          "name": "rf_inversion",
-          "type": "LATENT",
-          "links": [
-            1550
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "untwistingrope",
-        "ver": "c9136fcced444ea84778a25a37a2b45371ea06a5",
-        "Node name for S&R": "RFInversion",
-        "aux_id": "BigStationW/ComfyUi-Untwisting-RoPE"
-      },
-      "widgets_values": [
-        "rf_solver_2",
-        0.5,
-        0,
-        0.5,
-        0,
-        false,
-        20,
-        false
-      ]
-    },
-    {
       "id": 623,
       "type": "UntwistingRoPE",
       "pos": [
@@ -1045,6 +981,68 @@
         0.5,
         1,
         0.1
+      ]
+    },
+    {
+      "id": 603,
+      "type": "RFInversion",
+      "pos": [
+        812.2907721832939,
+        1175.3247940381746
+      ],
+      "size": [
+        273.3614812972471,
+        266
+      ],
+      "flags": {},
+      "order": 20,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 1556
+        },
+        {
+          "name": "reference_latent",
+          "type": "LATENT",
+          "link": 1526
+        },
+        {
+          "name": "ref_conditioning",
+          "type": "CONDITIONING",
+          "link": 1535
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "links": [
+            1549
+          ]
+        },
+        {
+          "name": "rf_inversion",
+          "type": "LATENT",
+          "links": [
+            1550
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "untwistingrope",
+        "ver": "c9136fcced444ea84778a25a37a2b45371ea06a5",
+        "Node name for S&R": "RFInversion",
+        "aux_id": "BigStationW/ComfyUi-Untwisting-RoPE"
+      },
+      "widgets_values": [
+        "rf_solver_2",
+        0.5,
+        0,
+        0.35,
+        20,
+        false
       ]
     }
   ],
@@ -1262,10 +1260,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.5559917313492302,
+      "scale": 0.7400249944258255,
       "offset": [
-        -250.85157484344091,
-        -419.42525737176913
+        -428.77664628262966,
+        -653.6214011580602
       ]
     },
     "frontendVersion": "1.45.15",
