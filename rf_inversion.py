@@ -1412,17 +1412,17 @@ class RFInversion:
                     'tooltip': 'Proximal-Mean Inversion: 0 disables PMI, 1.0 matches the official radius. Applies to RF gamma, RK2, and FireFlow.'
                 }),
                 'otip_strength': ('FLOAT', {
-                    'default': 0.0,
-                    'min': 0.35,
-                    'max': 2.0,
-                    'step': 0.05,
+                    'default': 0.35,
+                    'min': 0.0,
+                    'max': 1.0,
+                    'step': 0.01,
                     'tooltip': 'Optimal Transport for Rectified Flow Image Editing. 0 disables it.'
                 }),
                 'otip_clip_norm': ('FLOAT', {
                     'default': 20.0,
                     'min': 0.0,
                     'max': 100.0,
-                    'step': 0.1,
+                    'step': 0.01,
                     'tooltip': 'OTIP Clipping threshold for the closed-form Wasserstein-2 transport direction.'
                 }),
                 'verbose': ('BOOLEAN', {
