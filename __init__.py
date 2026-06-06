@@ -895,13 +895,6 @@ def _apply_qkv_shared_effects(
         cfg['_debug_variance_gated_v_adain_module'] = str(module_name)
         cfg['_debug_variance_gated_v_adain_ranges'] = list(ranges)
 
-    q_bshd = _apply_implicit_attention_entropy_scaling(
-        q_bshd, k_bshd,
-        cfg,
-        int(target_bsz),
-        str(module_name),
-        ranges,
-    )
 
     return restore(q_bshd, k_bshd, v_bshd)
 
@@ -976,189 +969,6 @@ def _apply_attention_output_shared_effects(
         cfg['_debug_post_attention_adain_ranges'] = list(ranges)
 
     return out_t, out_r
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Gram Attention-Entropy Scaling
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _expand_k_to_q_heads_for_logit_stats(k: torch.Tensor, q_heads: int) -> torch.Tensor:
-    """Map KV heads to Q heads for grouped-query attention logit statistics."""
-    if not torch.is_tensor(k) or k.ndim != 4:
-        return k
-    kv_heads = int(k.shape[2])
-    q_heads = int(q_heads)
-    if kv_heads == q_heads:
-        return k
-    if kv_heads <= 0 or q_heads % kv_heads != 0:
-        raise RuntimeError(
-            f'{vp._PREFIX} Gram attention entropy scaling cannot expand KV heads: '
-            f'q_heads={q_heads}, kv_heads={kv_heads}.'
-        )
-    return k.repeat_interleave(q_heads // kv_heads, dim=2)
-
-def _exact_global_logit_variance_gram(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    *,
-    eps: float = 1e-6,
-) -> torch.Tensor:
-    """
-    Uses:
-      ||QKᵀ||²_F = Tr((QᵀQ)(KᵀK))
-
-    It is not exact Shannon entropy; it is a VRAM-safe inverse-temperature
-    control signal that preserves the downstream optimized attention backend.
-    """
-    if q.ndim != 4 or k.ndim != 4:
-        raise RuntimeError(
-            f'{vp._PREFIX} Gram attention entropy scaling expected rank-4 Q/K, '
-            f'got q={tuple(q.shape)}, k={tuple(k.shape)}.'
-        )
-
-    bq, s, q_heads, d = q.shape
-    bk, t, k_heads, kd = k.shape
-    if bq != bk or d != kd:
-        raise RuntimeError(
-            f'{vp._PREFIX} Gram attention entropy scaling Q/K shape mismatch: '
-            f'q={tuple(q.shape)}, k={tuple(k.shape)}.'
-        )
-    if s <= 0 or t <= 0:
-        return torch.ones((int(bq), int(q_heads)), device=q.device, dtype=torch.float32)
-
-    k = _expand_k_to_q_heads_for_logit_stats(k, int(q_heads))
-    if int(k.shape[2]) != int(q_heads):
-        raise RuntimeError(
-            f'{vp._PREFIX} Gram attention entropy scaling head mismatch after KV expansion: '
-            f'q_heads={q_heads}, k_heads={int(k.shape[2])}.'
-        )
-
-    qf = q.float()
-    kf = k.float()
-    denom = float(max(1, int(s) * int(t)))
-
-    # Mean of all logits per batch/head:
-    #   E[QKᵀ] = dot(sum_i Q_i, sum_j K_j) / (S*T)
-    sum_q = qf.sum(dim=1)  # [B,H,D]
-    sum_k = kf.sum(dim=1)  # [B,H,D]
-    mean = torch.einsum('bhd,bhd->bh', sum_q, sum_k) / denom
-
-    # Second moment via Gram matrices:
-    #   E[(QKᵀ)^2] = Tr((QᵀQ)(KᵀK)) / (S*T)
-    gram_q = torch.einsum('bshd,bshe->bhde', qf, qf)  # [B,H,D,D]
-    gram_k = torch.einsum('bthd,bthe->bhde', kf, kf)  # [B,H,D,D]
-    second = torch.einsum('bhde,bhde->bh', gram_q, gram_k) / denom
-
-    return (second - mean.pow(2)).clamp_min(float(eps))
-
-def _apply_implicit_attention_entropy_scaling(
-    q_bshd: torch.Tensor,
-    k_bshd: torch.Tensor,
-    cfg: Dict[str, Any],
-    target_bsz: int,
-    module_name: str,
-    ranges: List[Tuple[int, int]],
-) -> torch.Tensor:
-    """
-    Thermodynamic Attention-style inverse-temperature control without materializing
-    B×S×T attention logits.
-
-    This version uses the Gram identity to compute the exact global variance of
-    the supplied pre-softmax QKᵀ logits per batch/head. Scaling target Q by
-    sqrt(var_ref / var_target) makes the target's global logit variance match
-    the reference while preserving optimized_attention_masked / FlashAttention.
-    """
-    if not isinstance(cfg, dict) or not cfg.get('enabled', False):
-        return q_bshd
-    entropy_scale = _coerce_strength01(cfg.get('attention_entropy_scaling', 0.0))
-    if entropy_scale <= 0.0:
-        return q_bshd
-    if not (torch.is_tensor(q_bshd) and torch.is_tensor(k_bshd)):
-        return q_bshd
-    if q_bshd.ndim != 4 or k_bshd.ndim != 4:
-        return q_bshd
-
-    target_bsz = int(target_bsz)
-    if target_bsz <= 0:
-        return q_bshd
-    if int(q_bshd.shape[0]) < target_bsz * 2 or int(k_bshd.shape[0]) < target_bsz * 2:
-        return q_bshd
-
-    try:
-        scale_min = float(cfg.get('attention_entropy_scale_min', 0.35))
-        scale_max = float(cfg.get('attention_entropy_scale_max', 3.0))
-    except Exception as exc:
-        raise ValueError('Invalid attention entropy scale clamp value.') from exc
-    if not (math.isfinite(scale_min) and math.isfinite(scale_max)):
-        raise ValueError('Invalid attention entropy scale clamp value: expected finite numbers.')
-    scale_min = max(1e-3, min(scale_min, scale_max))
-    scale_max = max(scale_min, scale_max)
-
-    eps = 1e-6
-    # Mutate the local Q tensor in place to avoid a full extra Q-sized clone.
-    # Only the target image-token slices are changed.
-    q_out = q_bshd
-    applied_ranges: List[Tuple[int, int]] = []
-    scale_means: List[float] = []
-    var_t_means: List[float] = []
-    var_r_means: List[float] = []
-
-    q_seqlen = int(q_bshd.shape[1])
-    k_seqlen = int(k_bshd.shape[1])
-
-    for s, e in ranges or []:
-        s_q = max(0, min(int(s), q_seqlen))
-        e_q = max(s_q, min(int(e), q_seqlen))
-        s_k = max(0, min(int(s), k_seqlen))
-        e_k = max(s_k, min(int(e), k_seqlen))
-        if e_q <= s_q or e_k <= s_k:
-            continue
-
-        q_t = q_bshd[:target_bsz, s_q:e_q]
-        q_r = q_bshd[target_bsz:target_bsz * 2, s_q:e_q]
-        k_t = k_bshd[:target_bsz, s_k:e_k]
-        k_r = k_bshd[target_bsz:target_bsz * 2, s_k:e_k]
-
-        if q_t.shape != q_r.shape:
-            raise RuntimeError(
-                f'{vp._PREFIX} Gram attention entropy scaling failed in {module_name}: '
-                f'target/ref Q range shape mismatch: target={tuple(q_t.shape)} ref={tuple(q_r.shape)}.'
-            )
-
-        var_t = _exact_global_logit_variance_gram(q_t, k_t, eps=eps)
-        var_r = _exact_global_logit_variance_gram(q_r, k_r, eps=eps)
-
-        # Scaling Q by s scales logits by s and global logit variance by s².
-        inv_temp = torch.sqrt(var_r / var_t.clamp_min(eps))
-        inv_temp = inv_temp.clamp(scale_min, scale_max)
-        inv_temp = 1.0 + entropy_scale * (inv_temp - 1.0)
-
-        q_out[:target_bsz, s_q:e_q] = q_t * inv_temp.view(
-            int(inv_temp.shape[0]), 1, int(inv_temp.shape[1]), 1
-        ).to(dtype=q_bshd.dtype)
-
-        applied_ranges.append((s_q, e_q))
-        scale_means.append(float(inv_temp.detach().float().mean().cpu().item()))
-        var_t_means.append(float(var_t.detach().float().mean().cpu().item()))
-        var_r_means.append(float(var_r.detach().float().mean().cpu().item()))
-
-    if applied_ranges:
-        cfg['_debug_attention_entropy_scaling_strength'] = float(entropy_scale)
-        cfg['_debug_attention_entropy_scaling_module'] = str(module_name)
-        cfg['_debug_attention_entropy_scaling_ranges'] = list(applied_ranges)
-        cfg['_debug_attention_entropy_method'] = 'gram_global_logit_variance'
-        cfg['_debug_attention_entropy_inverse_temperature_mean'] = (
-            sum(scale_means) / max(1, len(scale_means))
-        )
-        cfg['_debug_attention_entropy_target_variance_mean'] = (
-            sum(var_t_means) / max(1, len(var_t_means))
-        )
-        cfg['_debug_attention_entropy_reference_variance_mean'] = (
-            sum(var_r_means) / max(1, len(var_r_means))
-        )
-        cfg['_debug_attention_entropy_scale_min'] = float(scale_min)
-        cfg['_debug_attention_entropy_scale_max'] = float(scale_max)
-
-    return q_out
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Architecture detection
@@ -1456,13 +1266,6 @@ class UnofficialExtensions:
                     'step': 0.01,
                     'tooltip': 'Only aligned target/reference V tokens receive reference injection.',
                 }),
-                'attention_entropy_scaling': ('FLOAT', {
-                    'default': 0.0,
-                    'min': 0.0,
-                    'max': 1.0,
-                    'step': 0.01,
-                    'tooltip': 'Matches target attention sharpness/diffuseness to the reference attention entropy.',
-                }),
                 'variance_gated_v_adain': ('FLOAT', {
                     'default': 0.0,
                     'min': 0.0,
@@ -1491,7 +1294,6 @@ class UnofficialExtensions:
         axis0_rope_mode: str = 'default',
         axis0_rope_scale: float = 0.0,
         cosine_gated_v_injection: float = 0.0,
-        attention_entropy_scaling: float = 0.0,
         variance_gated_v_adain: float = 0.0,
         key_subspace_alignment: float = 0.0,
     ):
@@ -1500,7 +1302,6 @@ class UnofficialExtensions:
             'axis0_rope_mode': _coerce_axis0_rope_mode(axis0_rope_mode),
             'axis0_rope_scale': _coerce_axis0_rope_scale(axis0_rope_scale, default=0.0),
             'cosine_gated_v_injection': _coerce_strength01(cosine_gated_v_injection),
-            'attention_entropy_scaling': _coerce_strength01(attention_entropy_scaling),
             'variance_gated_v_adain': _coerce_strength01(variance_gated_v_adain),
             'key_subspace_alignment': _coerce_strength01(key_subspace_alignment),
         },)
@@ -1607,7 +1408,6 @@ class UntwistingRoPE:
             legacy_scale=ext_cfg.get('axis0_rope_scale', None),
         )
         axis0_rope_scale = _coerce_axis0_rope_scale(ext_cfg.get('axis0_rope_scale', 0.0), default=0.0)
-        attention_entropy_scaling = _coerce_strength01(ext_cfg.get('attention_entropy_scaling', 0.0))
         key_subspace_alignment = _coerce_strength01(ext_cfg.get('key_subspace_alignment', 0.0))
 
         if rf_active:
@@ -1634,7 +1434,6 @@ class UntwistingRoPE:
             f'post_attention_adain_strength={post_attention_adain_strength:.2f}  '
             f'axis0_rope_mode={axis0_rope_mode}  '
             f'axis0_rope_scale={axis0_rope_scale:.3f}  '
-            f'attention_entropy_scaling={attention_entropy_scaling:.2f}  '
             f'key_subspace_alignment={key_subspace_alignment:.2f}'
         )
         vp._vprint(stats, f'{vp._PREFIX} RF latent connected: {rf_active}  source={rf_source}')
@@ -1731,7 +1530,6 @@ class UntwistingRoPE:
                 'post_attention_adain_strength': post_attention_adain_strength,
                 'axis0_rope_mode': axis0_rope_mode,
                 'axis0_rope_scale': axis0_rope_scale,
-                'attention_entropy_scaling': attention_entropy_scaling,
                 'key_subspace_alignment': key_subspace_alignment,
                 'cross_batch_target_batch': target_b if rf_active else 0,
                 'progress': progress,
