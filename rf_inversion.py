@@ -637,11 +637,11 @@ def _rf_linear_target(ref_clean: torch.Tensor, eps: torch.Tensor, sigma: float) 
 
 def _flowturbo_pc_internal_sigmas(sigmas: List[float]) -> List[float]:
     """Build a deterministic FlowTurbo-style pseudo-corrector subgrid.
-    Pseudo-corrector Heun reuses the endpoint model evaluation from the
-    previous interval as the next interval's start velocity. With ``n`` sampler
-    intervals, Endpoint-Heun costs ``2*n`` model calls. This helper creates
-    ``2*n - 1`` internal intervals so pseudo-corrector uses the same budget:
-    one initial model call plus one endpoint call per internal interval.
+
+    Adds one midpoint inside every nonzero official sampler interval.
+    With n sampler intervals, this creates 2*n internal intervals:
+    one initial model call plus one endpoint call per internal interval,
+    so target model evals = 2*n + 1.
     """
     clean: List[float] = []
     for s in sigmas or []:
@@ -651,24 +651,16 @@ def _flowturbo_pc_internal_sigmas(sigmas: List[float]) -> List[float]:
             continue
         if not clean or abs(sf - clean[-1]) > 1e-8:
             clean.append(sf)
+
     clean = sorted(clean)
-    if len(clean) <= 2:
+    if len(clean) <= 1:
         return clean
-
-    intervals = []
-    for i in range(len(clean) - 1):
-        a, b = clean[i], clean[i + 1]
-        d = b - a
-        if d > 1e-8:
-            intervals.append((d, i, a, b))
-
-    extra_count = max(0, min(len(intervals) - 1, len(clean) - 2))
-    split_indices = {i for _, i, _, _ in sorted(intervals, reverse=True)[:extra_count]}
 
     grid: List[float] = [clean[0]]
     for i in range(len(clean) - 1):
         a, b = clean[i], clean[i + 1]
-        if i in split_indices:
+        d = b - a
+        if d > 1e-8:
             mid = 0.5 * (a + b)
             if mid - grid[-1] > 1e-8 and b - mid > 1e-8:
                 grid.append(mid)
