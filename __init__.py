@@ -1364,27 +1364,9 @@ class UntwistingRoPE:
                     'step': 0.01,
                     'tooltip': 'AdaIN aligns the target style statistics toward the reference.'
                 }),
-                'block_start': ('INT', {
-                    'default': 0,
-                    'min': 0,
-                    'max': 999,
-                    'step': 1,
-                    'tooltip': 'First block to patch (inclusive). Used when blocks string is empty.',
-                }),
-                'block_end': ('INT', {
-                    'default': 999,
-                    'min': 0,
-                    'max': 999,
-                    'step': 1,
-                    'tooltip': 'Last block to patch (inclusive). Used when blocks string is empty.',
-                }),
                 'blocks': ('STRING', {
-                    'default': '',
-                    'tooltip': (
-                        'Optional block range override, e.g. "7-27" or "0-8, 20-27". '
-                        'If non-empty, overrides block_start and block_end. '
-                        'If empty, block_start and block_end are used.'
-                    ),
+                    'default': '0-999',
+                    'tooltip': 'Specify block ranges to patch, e.g -> 0-8, 28-37'
                 }),
                 'verbose': ('BOOLEAN', {
                     'default': False,
@@ -1393,14 +1375,6 @@ class UntwistingRoPE:
             },
             'optional': {
                 'unofficial_extensions': ('UNTWISTING_ROPE_EXTENSIONS',),
-                'blend_weights': ('ROPE_BLEND_WEIGHTS', {
-                    'tooltip': (
-                        'Optional blend weights from the RoPE Blend Weights node. '
-                        'Controls the relative influence of each reference image when '
-                        'multiple reference images are provided as a batch. '
-                        'If not connected, all references receive equal weight.'
-                    ),
-                }),
             },
         }
 
@@ -1414,12 +1388,9 @@ class UntwistingRoPE:
         low_scale_end: float,
         blocks: str,
         adain_strength: float,
-        block_start: int = 0,
-        block_end: int = 999,
         verbose: bool = False,
         rf_inversion: Optional[Dict[str, Any]] = None,
         unofficial_extensions: Optional[Dict[str, Any]] = None,
-        blend_weights: Optional[List[float]] = None,
     ):
         rf_active, rf_cfg, rf_state, ref_clean_cpu, ref_conditioning, rf_source = _rf_latent_get_config(rf_inversion)
         node_verbose = vp._coerce_bool(verbose)
@@ -1455,7 +1426,7 @@ class UntwistingRoPE:
         vp._vprint(stats, f'{vp._PREFIX} high_scale: {high_scale_start:.3f} → {high_scale_end:.3f}')
         vp._vprint(stats, f'{vp._PREFIX} low_scale:  {low_scale_start:.3f} → {low_scale_end:.3f}')
         vp._vprint(stats,
-            f'{vp._PREFIX} blocks: {blocks if blocks.strip() else f"{block_start}-{block_end}"}  '
+            f'{vp._PREFIX} blocks: {blocks if blocks.strip() else "all"}  '
             f'adain={adain_strength:.2f}  '
             f'unofficial: '
             f'cosine_gated_v_injection={cosine_gated_v_injection:.2f}  '
@@ -1520,27 +1491,7 @@ class UntwistingRoPE:
 
         old_wrapper = model_clone.model_options.get('model_function_wrapper', None)
 
-        # Block range: string overrides ints if non-empty.
-        if blocks.strip():
-            parsed_blocks = _parse_active_blocks(blocks)
-        else:
-            parsed_blocks = set(range(int(block_start), int(block_end) + 1))
-
-        # Multi-reference blend setup.
-        # ref_clean_cpu may be [N, C, H, W] (4D) or [N, C, T, H, W] (5D video).
-        # In either case dim 0 is the batch/reference count.
-        # blend_weights is now a dict {"weights": [...], "mode": "..."} from RoPEBlendWeights.
-        num_ref_streams = int(ref_clean_cpu.shape[0]) if torch.is_tensor(ref_clean_cpu) and ref_clean_cpu.ndim >= 4 else 1
-        if isinstance(blend_weights, dict):
-            blend_weights_raw = blend_weights.get("weights", [])
-            blend_mode = str(blend_weights.get("mode", "round_robin"))
-        elif isinstance(blend_weights, list):
-            blend_weights_raw = blend_weights
-            blend_mode = "round_robin"
-        else:
-            blend_weights_raw = []
-            blend_mode = "round_robin"
-        resolved_blend_weights = resolve_blend_weights(blend_weights_raw, num_ref_streams)
+        parsed_blocks = _parse_active_blocks(blocks)
 
         def model_function_wrapper(apply_model: Callable, args: Dict[str, Any]) -> torch.Tensor:
             stats.wrapper_calls += 1
@@ -1585,9 +1536,6 @@ class UntwistingRoPE:
                 'sigma': sigma,
                 'wrapper_call': call_n,
                 '_rope_scale_debug_printed': False,
-                'num_ref_streams': num_ref_streams,
-                'blend_weights': resolved_blend_weights,
-                'blend_mode': blend_mode,
             }
             default_cfg = getattr(adapter, 'default_runtime_cfg', None)
             if not callable(default_cfg):
@@ -1609,10 +1557,8 @@ class UntwistingRoPE:
 
             if rf_active and torch.is_tensor(ref_clean_cpu):
                 try:
-                    ref_clean_all = ref_clean_cpu.to(device=input_x.device, dtype=input_x.dtype)
-                    # Split batched ref_clean into per-reference slices along dim 0.
-                    # Works for both 4D [N,C,H,W] and 5D [N,C,T,H,W] video latents.
-                    ref_clean_list = [ref_clean_all[i:i+1] for i in range(num_ref_streams)]
+                    ref_clean = ref_clean_cpu.to(device=input_x.device, dtype=input_x.dtype)
+                    ref = _repeat_to_batch(ref_clean, target_b)
 
                     if not rf_state.get('schedule_built', False) and rf_state.get('sampler_sigmas', None) is not None:
                         effective_ref_conditioning, adapter_ref_status = _prepare_reference_conditioning_for_adapter(
@@ -1622,38 +1568,28 @@ class UntwistingRoPE:
                         )
                         rf_kwargs, rf_cond_mode = _build_rf_conditioning_kwargs(c, effective_ref_conditioning, target_b)
                         rf_cond_mode = _append_conditioning_status(rf_cond_mode, adapter_ref_status)
-                                                                                               
+                        rf_ref_clean = _repeat_to_batch(ref_clean, target_b)
                         sampler_sigmas = list(rf_state['sampler_sigmas'])
-
-                        # Build one RF trajectory per reference image.
-                        for ref_i, ref_clean_i in enumerate(ref_clean_list):
-                            rf_ref_clean_i = _repeat_to_batch(ref_clean_i, target_b)
-                            ref_clean_cpu_i = ref_clean_cpu[ref_i:ref_i+1]
-                            built_cache_i, eps_i, sorted_sigmas, cache_key_i, persistent_hit_i = _rf_ensure_trajectory_cache(
-                                rf_inversion=rf_inversion,
-                                rf_state=rf_state,
-                                rf_cfg=rf_cfg,
-                                ref_clean_cpu=ref_clean_cpu_i,
-                                ref_clean_for_build=rf_ref_clean_i,
-                                ref_conditioning=ref_conditioning,
-                                sampler_sigmas=sampler_sigmas,
-                                target_b=target_b,
-                                rf_cond_mode=rf_cond_mode,
-                                apply_model_fn=_make_raw_velocity_apply_model_fn(apply_model),
-                                base_model_kwargs=rf_kwargs,
-                                device=input_x.device,
-                                dtype=input_x.dtype,
-                                stats=stats,
-                                preview_callback_factory=lambda: _rf_make_preview_callback(model_clone, max(1, len(sampler_sigmas) - 1)),
-                                debug_store=debug_store,
-                                parameterization=stats.parameterization,
-                            )
-                            rf_state[f'cache_{ref_i}'] = built_cache_i
-                            if ref_i == 0:
-                                rf_state['cache'] = built_cache_i
-                                rf_state['eps'] = eps_i
-
-                        ref_mode = 'RF sampler-sigma trajectory (persistent-cache hit)' if persistent_hit_i else 'RF sampler-sigma trajectory (built)'
+                        built_cache, eps, sorted_sigmas, cache_key, persistent_hit = _rf_ensure_trajectory_cache(
+                            rf_inversion=rf_inversion,
+                            rf_state=rf_state,
+                            rf_cfg=rf_cfg,
+                            ref_clean_cpu=ref_clean_cpu,
+                            ref_clean_for_build=rf_ref_clean,
+                            ref_conditioning=ref_conditioning,
+                            sampler_sigmas=sampler_sigmas,
+                            target_b=target_b,
+                            rf_cond_mode=rf_cond_mode,
+                            apply_model_fn=_make_raw_velocity_apply_model_fn(apply_model),
+                            base_model_kwargs=rf_kwargs,
+                            device=input_x.device,
+                            dtype=input_x.dtype,
+                            stats=stats,
+                            preview_callback_factory=lambda: _rf_make_preview_callback(model_clone, max(1, len(sampler_sigmas) - 1)),
+                            debug_store=debug_store,
+                            parameterization=stats.parameterization,
+                        )
+                        ref_mode = 'RF sampler-sigma trajectory (persistent-cache hit)' if persistent_hit else 'RF sampler-sigma trajectory (built)'
                         stats.rf_sigma_cache = rf_state['cache']
                         stats.rf_eps = rf_state['eps']
                         stats.rf_schedule_built = True
@@ -1666,7 +1602,6 @@ class UntwistingRoPE:
                             'SAMPLER_SAMPLE must run before UntwistingRoPE model calls.'
                         )
 
-                    # Validate primary cache for backward compat debug.
                     cache = rf_state.get('cache') if isinstance(rf_state.get('cache'), dict) else {}
                     cached, used_sigma_key, cache_lookup = _rf_cache_lookup(cache, sigma_key, allow_nearest=True)
                     if cached is None:
@@ -1679,92 +1614,41 @@ class UntwistingRoPE:
                     debug_store['last_cache_lookup'] = cache_lookup
                     debug_store['last_cache_key'] = float(used_sigma_key)
 
-                                                                                                                                                        
+                    ref_noisy = _repeat_to_batch(cached.to(device=input_x.device, dtype=input_x.dtype), target_b)
 
-                                                                  
-                                                                                                    
-                            
-                                                         
-                                                         
-                                                                                               
-                                                                                           
-                                 
-                                                                                             
-                                                
-                                                                                                                                                     
+                    if ref_noisy.shape[-2:] == input_x.shape[-2:]:
+                        input_for_model = torch.cat([input_x, ref_noisy], dim=0)
+                        try:
+                            if (torch.is_tensor(timestep)
+                                    and timestep.ndim > 0
+                                    and int(timestep.shape[0]) == target_b):
+                                timestep_for_model = torch.cat([timestep, timestep], dim=0)
+                            else:
+                                timestep_for_model = _repeat_to_batch(timestep, target_b * 2)
+                        except Exception as exc:
+                            raise RuntimeError('UntwistingRoPE failed while duplicating timestep for reference batch.') from exc
 
-                    # Build list of noisy latents for all N reference streams.
-                    # Each cache entry may itself be a batch of N items if the
-                    # reference latent was batched; we split along batch dim.
-                    all_ref_noisy = []
-                    for ref_i in range(num_ref_streams):
-                        cache_i = rf_state.get(f'cache_{ref_i}') if num_ref_streams > 1 else rf_state.get('cache')
-                        cache_i = cache_i if isinstance(cache_i, dict) else {}
-                        cached_i, used_sigma_key_i, _ = _rf_cache_lookup(cache_i, sigma_key, allow_nearest=True)
-                        if cached_i is None:
-                            raise RuntimeError(
-                                f'UntwistingRoPE failed: no RF cache entry for ref {ref_i} at sigma={sigma_key:.6f}.'
-                            )
-                        noisy_i = _repeat_to_batch(cached_i.to(device=input_x.device, dtype=input_x.dtype), target_b)
-                        all_ref_noisy.append(noisy_i)
+                        effective_ref_conditioning, adapter_ref_status = _prepare_reference_conditioning_for_adapter(
+                            adapter, ref_conditioning, dm, input_x.device,
+                            c.get('c_crossattn').dtype if torch.is_tensor(c.get('c_crossattn', None)) else input_x.dtype,
+                            stats, label='UntwistingRoPEMerge',
+                        )
+                        c, forced_cap_mask = _merge_reference_conditioning_into_c(c, effective_ref_conditioning, target_b)
+                        cfg['adapter_ref_conditioning_status'] = adapter_ref_status
+                        cfg['forced_cap_mask'] = forced_cap_mask.to(device=input_x.device)
+                        cfg['cross_batch_target_batch'] = target_b
 
-                    # Spatial mismatch check against first reference.
-                    ref_noisy = all_ref_noisy[0]
-                    if ref_noisy.shape[-2:] != input_x.shape[-2:]:
-                                                
-                                                                                                                                               
-                         
+                        try:
+                            if isinstance(cond_or_uncond, list):
+                                cond_or_uncond = cond_or_uncond + cond_or_uncond
+                        except Exception as exc:
+                            raise RuntimeError('UntwistingRoPE failed while duplicating cond_or_uncond metadata.') from exc
+                    else:
                         raise RuntimeError(
                             f'UntwistingRoPE failed: spatial mismatch input_x={tuple(input_x.shape[-2:])} '
                             f'ref_noisy={tuple(ref_noisy.shape[-2:])}. '
-                            f'Make sure the resolution of the reference images matches the output resolution.'
+                            f'Make sure the resolution of the reference image fed into the RF inversion node matches the final image resolution (same width and height).'
                         )
-
-                    # Cat: [target, ref_0, ref_1, ..., ref_{N-1}]
-                    input_for_model = torch.cat([input_x] + all_ref_noisy, dim=0)
-                    try:
-                        total_batch = target_b * (num_ref_streams + 1)
-                        if (torch.is_tensor(timestep)
-                                and timestep.ndim > 0
-                                and int(timestep.shape[0]) == target_b):
-                            timestep_for_model = timestep.repeat(num_ref_streams + 1)
-                        else:
-                            timestep_for_model = _repeat_to_batch(timestep, total_batch)
-                    except Exception as exc:
-                        raise RuntimeError('UntwistingRoPE failed while duplicating timestep for reference batch.') from exc
-
-                    # Merge conditioning for the first reference stream only.
-                    # Additional reference streams share the same conditioning.
-                    effective_ref_conditioning, adapter_ref_status = _prepare_reference_conditioning_for_adapter(
-                        adapter, ref_conditioning, dm, input_x.device,
-                        c.get('c_crossattn').dtype if torch.is_tensor(c.get('c_crossattn', None)) else input_x.dtype,
-                        stats, label='UntwistingRoPEMerge',
-                    )
-                    c, forced_cap_mask = _merge_reference_conditioning_into_c(c, effective_ref_conditioning, target_b)
-                    # Repeat conditioning for all N reference streams.
-                    if num_ref_streams > 1:
-                        for key, val in list(c.items()):
-                            if key == 'transformer_options':
-                                continue
-                            if torch.is_tensor(val) and val.ndim > 0 and int(val.shape[0]) == target_b * 2:
-                                # Already target+ref_0; extend to target+ref_0+...+ref_{N-1}
-                                ref_val = val[target_b:]
-                                c[key] = torch.cat([val] + [ref_val] * (num_ref_streams - 1), dim=0)
-                        forced_cap_mask_extended = torch.cat(
-                            [forced_cap_mask] + [forced_cap_mask[target_b:]] * (num_ref_streams - 1), dim=0
-                        )
-                    else:
-                        forced_cap_mask_extended = forced_cap_mask
-
-                    cfg['adapter_ref_conditioning_status'] = adapter_ref_status
-                    cfg['forced_cap_mask'] = forced_cap_mask_extended.to(device=input_x.device)
-                    cfg['cross_batch_target_batch'] = target_b
-
-                    try:
-                        if isinstance(cond_or_uncond, list):
-                            cond_or_uncond = cond_or_uncond * (num_ref_streams + 1)
-                    except Exception as exc:
-                        raise RuntimeError('UntwistingRoPE failed while duplicating cond_or_uncond metadata.') from exc
                 except RuntimeError:
                     raise
                 except Exception as exc:
@@ -1831,20 +1715,14 @@ from .rf_inversion import (
     _sigma_from_timestep,
     _sigma_to_progress,
 )
-from .blend_weights import RoPEBlendWeights, resolve_blend_weights
-from .multi_ref_encode import MultiRefEncode
 
 NODE_CLASS_MAPPINGS = {
     'RFInversion': RFInversion,
     'UnofficialExtensions': UnofficialExtensions,
     'UntwistingRoPE': UntwistingRoPE,
-    'RoPEBlendWeights': RoPEBlendWeights,
-    'MultiRefEncode': MultiRefEncode,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     'RFInversion': 'RF Inversion',
     'UnofficialExtensions': 'Unofficial Extensions',
     'UntwistingRoPE': 'Untwisting RoPE',
-    'RoPEBlendWeights': 'RoPE Blend Weights',
-    'MultiRefEncode': 'Multi-Ref Encode',
 }
